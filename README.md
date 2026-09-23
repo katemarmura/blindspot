@@ -33,10 +33,23 @@ pinned exactly as recorded in `uv.lock`.
 cp .env.example .env
 ```
 
-Then set `ANTHROPIC_API_KEY` in `.env`. Run project commands from the repository root, so
-`.env` is found. This only adds configuration *support* — nothing in the app calls the
-Anthropic API yet; `get_anthropic_api_key()` (`src/blindspot/config.py`) exists but is
-unused until model calls are added later. The server and its endpoints work without a key.
+Then set `ANTHROPIC_API_KEY` and `ANTHROPIC_MODEL` in `.env` (pick a model ID you have
+access to — see [platform.claude.com/docs](https://platform.claude.com/docs) for current
+IDs). Run project commands from the repository root, so `.env` is found. This only adds
+configuration *support*, not a real integration: `get_anthropic_api_key()`
+(`src/blindspot/config.py`) exists but is not called by the server, and `blindspot.llm_smoke`
+is a standalone CLI check, not a dependency of the app. The server and its endpoints work
+without either variable set.
+
+#### Anthropic connection smoke check
+
+```bash
+uv run python -m blindspot.llm_smoke
+```
+
+Sends one short prompt to the configured model and prints the reply, the model ID that
+responded, and the input/output token counts. **This makes a real, billable API request.**
+Requires `ANTHROPIC_API_KEY` and `ANTHROPIC_MODEL` to be set first.
 
 ## Development commands
 

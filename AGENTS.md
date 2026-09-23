@@ -22,9 +22,13 @@ for intent; treat this file as the quick orientation for how to work in the repo
 
 **As of now, this repository contains a project scaffold plus a bare FastAPI server** — a
 Python package, tooling, CI, and one `GET /health` endpoint. There is no orchestrator, no
-expert agents, no pipeline, no domain contracts (`Finding`, `ExpertDefinition`, pipeline
-state, etc.), and no LLM integration yet. Those are deliberately being designed before
-they are implemented (see the open questions in `docs/project-brief.md`).
+expert agents, no pipeline, and no domain contracts (`Finding`, `ExpertDefinition`,
+pipeline state, etc.) yet. Those are deliberately being designed before they are
+implemented (see the open questions in `docs/project-brief.md`).
+
+There is one standalone diagnostic script, `src/blindspot/llm_smoke.py`, that makes a
+real Anthropic API call to verify credentials/connectivity — it is not part of the
+application and nothing else imports it.
 
 Do not infer architecture from this file beyond what's stated. Any structure diagrams or
 role lists in `docs/project-brief.md` are explicitly **provisional** — starting points for
@@ -37,8 +41,12 @@ discussion, not specifications to implement as-is.
   `uv.lock` (committed, reproducible)
 - **Web framework:** FastAPI, served by Uvicorn (`src/blindspot/main.py`)
 - **Config:** `src/blindspot/config.py` — `get_anthropic_api_key()` lazily loads
-  `ANTHROPIC_API_KEY` from `.env` (via `python-dotenv`) or the shell environment. Nothing
-  imports or calls it yet; it's config support only, not wired into any endpoint.
+  `ANTHROPIC_API_KEY` from `.env` (via `python-dotenv`) or the shell environment. Only
+  `llm_smoke.py` calls it; the FastAPI app doesn't, and doesn't need a key to run.
+- **LLM smoke check:** `src/blindspot/llm_smoke.py` (`uv run python -m blindspot.llm_smoke`)
+  — the official `anthropic` SDK, async client, one request. Verifies `ANTHROPIC_API_KEY` +
+  `ANTHROPIC_MODEL` are configured and reachable. Not an LLM integration for the product;
+  don't build on top of it without deciding that deliberately.
 - **Lint/format:** Ruff
 - **Type checker:** mypy (`strict` mode)
 - **Tests:** pytest, with FastAPI's `TestClient` (needs `httpx2`, a dev dependency) for

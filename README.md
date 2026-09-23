@@ -27,6 +27,17 @@ uv sync
 This creates `.venv` and installs the project plus dev dependencies (ruff, pytest, mypy),
 pinned exactly as recorded in `uv.lock`.
 
+### Configuration
+
+```bash
+cp .env.example .env
+```
+
+Then set `ANTHROPIC_API_KEY` in `.env`. Run project commands from the repository root, so
+`.env` is found. This only adds configuration *support* — nothing in the app calls the
+Anthropic API yet; `get_anthropic_api_key()` (`src/blindspot/config.py`) exists but is
+unused until model calls are added later. The server and its endpoints work without a key.
+
 ## Development commands
 
 | Command | Purpose |

@@ -36,18 +36,21 @@ discussion, not specifications to implement as-is.
 - **Package/env manager:** [uv](https://docs.astral.sh/uv/) — `pyproject.toml` +
   `uv.lock` (committed, reproducible)
 - **Web framework:** FastAPI, served by Uvicorn (`src/blindspot/main.py`)
+- **Config:** `src/blindspot/config.py` — `get_anthropic_api_key()` lazily loads
+  `ANTHROPIC_API_KEY` from `.env` (via `python-dotenv`) or the shell environment. Nothing
+  imports or calls it yet; it's config support only, not wired into any endpoint.
 - **Lint/format:** Ruff
 - **Type checker:** mypy (`strict` mode)
-- **Tests:** pytest, with FastAPI's `TestClient` (needs `httpx`, a dev dependency) for
+- **Tests:** pytest, with FastAPI's `TestClient` (needs `httpx2`, a dev dependency) for
   endpoint tests
 - **Layout:** `src/` layout — the package is `src/blindspot/`, importable only once
   installed (via `uv sync`), which avoids accidentally importing from the working
   directory instead of the installed package.
 
 Likely future additions (not yet present, do not add speculatively): Pydantic domain
-models, an async LLM client, and eventually persistent pipeline state. Do not introduce
-an agent framework, a database, Docker, or a frontend until the domain contracts and first
-pipeline are designed.
+models, an async LLM client that actually calls Anthropic, and eventually persistent
+pipeline state. Do not introduce an agent framework, a database, Docker, or a frontend
+until the domain contracts and first pipeline are designed.
 
 ## Development commands
 

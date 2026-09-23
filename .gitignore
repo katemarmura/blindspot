@@ -22,6 +22,7 @@ wheels/
 # Environment variables
 .env
 .env.*
+!.env.example
 
 # Claude Code local (machine-specific) settings
 .claude/settings.local.json

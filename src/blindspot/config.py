@@ -6,6 +6,7 @@ from pathlib import Path
 from dotenv import load_dotenv
 
 _ANTHROPIC_API_KEY_VAR = "ANTHROPIC_API_KEY"
+_ANTHROPIC_MODEL_VAR = "ANTHROPIC_MODEL"
 
 
 def get_anthropic_api_key() -> str:
@@ -24,5 +25,23 @@ def get_anthropic_api_key() -> str:
         raise ValueError(
             f"{_ANTHROPIC_API_KEY_VAR} is not set. Copy .env.example to .env and set "
             f"{_ANTHROPIC_API_KEY_VAR}, or export it in your shell."
+        )
+    return value
+
+
+def get_anthropic_model() -> str:
+    """Return the configured Anthropic model ID.
+
+    Loads `.env` the same way as `get_anthropic_api_key`. Raises `ValueError`
+    if `ANTHROPIC_MODEL` is missing, empty, or whitespace-only. There is no
+    default — callers must configure a model explicitly.
+    """
+    load_dotenv(Path.cwd() / ".env", override=False)
+
+    value = os.environ.get(_ANTHROPIC_MODEL_VAR)
+    if value is None or not value.strip():
+        raise ValueError(
+            f"{_ANTHROPIC_MODEL_VAR} is not set. Copy .env.example to .env and set "
+            f"{_ANTHROPIC_MODEL_VAR}, or export it in your shell."
         )
     return value

@@ -10,7 +10,8 @@ This is a learning project for multi-agent systems, orchestration, and Python ba
 development. See [`docs/project-brief.md`](docs/project-brief.md) for the full design
 context and [`AGENTS.md`](AGENTS.md) for the current project scope.
 
-**Status:** project setup only. No domain logic, agents, or pipeline yet.
+**Status:** minimal runnable FastAPI server with a health check. No domain logic, agents,
+or pipeline yet.
 
 ## Requirements
 
@@ -30,6 +31,7 @@ pinned exactly as recorded in `uv.lock`.
 
 | Command | Purpose |
 | --- | --- |
+| `uv run uvicorn blindspot.main:app --reload` | Run the dev server (http://127.0.0.1:8000) |
 | `uv run pytest` | Run the test suite |
 | `uv run ruff check .` | Lint |
 | `uv run ruff format .` | Format |
@@ -38,13 +40,16 @@ pinned exactly as recorded in `uv.lock`.
 | `uv add --dev <package>` | Add a dev-only dependency |
 | `uv lock` | Refresh `uv.lock` after editing `pyproject.toml` by hand |
 
+Health check: `GET /health` → `200 {"status": "ok"}`.
+
 All checks run in CI on every push and pull request — see
 [`.github/workflows/ci.yml`](.github/workflows/ci.yml).
 
 ## Project layout
 
 ```text
-src/blindspot/   # the blindspot package (src layout: importable only after install)
-tests/           # pytest suite
-docs/            # design notes and the original project brief
+src/blindspot/       # the blindspot package (src layout: importable only after install)
+src/blindspot/main.py  # FastAPI app (currently just GET /health)
+tests/                # pytest suite
+docs/                 # design notes and the original project brief
 ```

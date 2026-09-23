@@ -157,6 +157,33 @@ def test_run_expert_invalid_output_is_an_error(
         asyncio.run(expert.run_expert("Open a coffee shop in Warsaw.", "Financial"))
 
 
+def test_cli_invalid_output_keeps_raw_model_content_out_of_stderr(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    _setup_env(tmp_path, monkeypatch)
+    marker = "SECRET-MARKER-XYZ"
+    try:
+        # Simulates malformed model output that includes an unexpected field
+        # carrying arbitrary (here, sensitive-looking) model-generated text.
+        ExpertReport.model_validate({"findings": [], "leaked_field": marker})
+        raise AssertionError("expected a ValidationError")
+    except pydantic.ValidationError as real_validation_error:
+        validation_error: pydantic.ValidationError = real_validation_error
+
+    monkeypatch.setattr(anthropic, "AsyncAnthropic", _make_fake_client(error=validation_error))
+
+    exit_code = expert.main(
+        ["--plan", "Open a coffee shop in Warsaw.", "--perspective", "Financial"]
+    )
+
+    assert exit_code == 1
+    err = capsys.readouterr().err
+    assert marker not in err
+    assert "input_value" not in err
+    assert "leaked_field" in err
+    assert "Extra inputs are not permitted" in err
+
+
 def test_run_expert_api_failure_is_an_error(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

@@ -27,6 +27,18 @@ class ExpertError(Exception):
     """Raised when an expert run fails: refusal, truncation, invalid output, or an API error."""
 
 
+def _describe_validation_error(exc: pydantic.ValidationError) -> str:
+    """Summarize a ValidationError by field location and message only.
+
+    Never includes `input_value` — pydantic's default error rendering embeds
+    the raw value that failed validation, which here comes from model
+    output and must not reach logs/stderr unsanitized.
+    """
+    details = exc.errors(include_url=False, include_context=False, include_input=False)
+    parts = [f"{'.'.join(str(part) for part in d['loc'])}: {d['msg']}" for d in details]
+    return "; ".join(parts) if parts else "no details available"
+
+
 @dataclass(frozen=True)
 class ExpertRun:
     report: ExpertReport
@@ -67,7 +79,10 @@ async def run_expert(plan: str, perspective: str) -> ExpertRun:
                 output_format=ExpertReport,
             )
         except pydantic.ValidationError as exc:
-            raise ExpertError(f"Model output did not match the expected schema: {exc}") from exc
+            details = _describe_validation_error(exc)
+            raise ExpertError(
+                f"Model output did not match the expected schema ({details})"
+            ) from exc
         except anthropic.AuthenticationError as exc:
             raise ExpertError(f"Authentication error: {exc.message}") from exc
         except anthropic.RateLimitError as exc:

@@ -230,8 +230,9 @@ def test_cli_invalid_output_keeps_raw_model_content_out_of_stderr(
     err = capsys.readouterr().err
     assert marker not in err
     assert "input_value" not in err
-    assert "leaked_field" in err
-    assert "Extra inputs are not permitted" in err
+    # The unexpected key's name is model-generated too, so it is replaced.
+    assert "leaked_field" not in err
+    assert "<unknown field>: Extra inputs are not permitted" in err
 
 
 def test_run_expert_api_failure_is_an_error(
@@ -617,3 +618,244 @@ def test_initial_api_error_has_no_returned_model(
         _run()
 
     assert exc_info.value.returned_model is None
+
+
+# --- Failure diagnostics ---
+
+
+def _diagnostics(exc_info: pytest.ExceptionInfo[expert.ExpertError]) -> dict[str, Any]:
+    diagnostics = exc_info.value.diagnostics
+    assert diagnostics is not None
+    return diagnostics.to_json()
+
+
+def _issues(diagnostics: dict[str, Any]) -> set[tuple[str, str, str]]:
+    return {(i["schema"], i["loc"], i["type"]) for i in diagnostics["validation_errors"]}
+
+
+def test_four_valid_findings_with_normal_completion_trigger_recovery(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _setup_env(tmp_path, monkeypatch)
+    fake = _install_fake(
+        monkeypatch, _message(_report_json(_CANDIDATES[:4])), _selection_message([1, 0])
+    )
+
+    run = _run()
+
+    assert len(fake.calls) == 2
+    assert run.usage.recovery_attempted is True
+    assert run.report.findings == [_CANDIDATES[1], _CANDIDATES[0]]
+
+
+def test_too_many_findings_plus_invalid_finding_reports_candidate_problem(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _setup_env(tmp_path, monkeypatch)
+    findings = [c.model_dump() for c in _CANDIDATES[:4]]
+    findings[2]["title"] = " "
+    fake = _install_fake(monkeypatch, _message(json.dumps({"findings": findings})))
+
+    with pytest.raises(expert.ExpertError) as exc_info:
+        _run()
+
+    assert len(fake.calls) == 1
+    diagnostics = _diagnostics(exc_info)
+    assert diagnostics["failure_stage"] == "initial"
+    assert diagnostics["stop_reason"] == "end_turn"
+    assert diagnostics["recovery_skip_reason"] == "candidate_validation_failed"
+    # The bounded schema alone only reports the count; the candidate check
+    # exposes the blank title as well.
+    assert _issues(diagnostics) == {
+        ("expert_report", "findings", "too_long"),
+        ("candidate_report", "findings.2.title", "value_error"),
+    }
+    message = str(exc_info.value)
+    assert "candidate findings also invalid (findings.2.title" in message
+    assert "recovery not attempted: candidate_validation_failed" in message
+
+
+def test_unexpected_stop_reason_explains_skipped_recovery(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _setup_env(tmp_path, monkeypatch)
+    fake = _install_fake(
+        monkeypatch, _message(_report_json(_CANDIDATES[:4]), stop_reason="stop_sequence")
+    )
+
+    with pytest.raises(expert.ExpertError) as exc_info:
+        _run()
+
+    assert len(fake.calls) == 1
+    diagnostics = _diagnostics(exc_info)
+    assert diagnostics["stop_reason"] == "stop_sequence"
+    assert diagnostics["recovery_skip_reason"] == "response_not_end_turn"
+    # All four candidates were individually valid; only the count failed.
+    assert _issues(diagnostics) == {("expert_report", "findings", "too_long")}
+
+
+@pytest.mark.parametrize(
+    ("response", "stop_reason", "skip_reason", "issues"),
+    [
+        pytest.param(
+            _message('{"findings": [', stop_reason="max_tokens"),
+            "max_tokens",
+            "response_not_end_turn",
+            None,
+            id="truncated",
+        ),
+        pytest.param(
+            _message("not json"),
+            "end_turn",
+            "malformed_json",
+            {
+                ("expert_report", "<root>", "json_invalid"),
+                ("candidate_report", "<root>", "json_invalid"),
+            },
+            id="malformed-json",
+        ),
+        pytest.param(_message(None), "end_turn", "no_text_output", None, id="no-text"),
+        pytest.param(
+            _message(None, stop_reason="refusal"),
+            "refusal",
+            "response_not_end_turn",
+            None,
+            id="refusal",
+        ),
+    ],
+)
+def test_initial_failures_are_distinguishable(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    response: Message,
+    stop_reason: str,
+    skip_reason: str,
+    issues: set[tuple[str, str, str]] | None,
+) -> None:
+    _setup_env(tmp_path, monkeypatch)
+    _install_fake(monkeypatch, response)
+
+    with pytest.raises(expert.ExpertError) as exc_info:
+        _run()
+
+    diagnostics = _diagnostics(exc_info)
+    assert diagnostics["failure_stage"] == "initial"
+    assert diagnostics["stop_reason"] == stop_reason
+    assert diagnostics["recovery_skip_reason"] == skip_reason
+    if issues is None:
+        assert diagnostics["validation_errors"] is None
+    else:
+        assert _issues(diagnostics) == issues
+
+
+def test_initial_api_failure_records_null_stop_reason(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _setup_env(tmp_path, monkeypatch)
+    _install_fake(monkeypatch, _api_error())
+
+    with pytest.raises(expert.ExpertError) as exc_info:
+        _run()
+
+    assert _diagnostics(exc_info) == {
+        "failure_stage": "initial",
+        "stop_reason": None,
+        "recovery_skip_reason": "no_response",
+        "validation_errors": None,
+    }
+
+
+@pytest.mark.parametrize(
+    ("selection", "stop_reason", "issues"),
+    [
+        pytest.param(
+            _selection_message([1.0]),
+            "end_turn",
+            {("selection", "selected_indices.0", "int_type")},
+            id="non-integer",
+        ),
+        pytest.param(
+            _selection_message([0, 7]),
+            "end_turn",
+            {("selection", "selected_indices.1", "index_out_of_range")},
+            id="out-of-range",
+        ),
+        pytest.param(
+            _message('{"selected_indices": [', stop_reason="max_tokens"),
+            "max_tokens",
+            None,
+            id="truncated",
+        ),
+        pytest.param(_message(None), "end_turn", None, id="no-text"),
+        pytest.param(_api_error(), None, None, id="api-error"),
+    ],
+)
+def test_selection_failures_are_labelled_as_selection_stage(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    selection: Message | BaseException,
+    stop_reason: str | None,
+    issues: set[tuple[str, str, str]] | None,
+) -> None:
+    _setup_env(tmp_path, monkeypatch)
+    _install_fake(monkeypatch, _message(_report_json(_CANDIDATES)), selection)
+
+    with pytest.raises(expert.ExpertError) as exc_info:
+        _run()
+
+    diagnostics = _diagnostics(exc_info)
+    assert diagnostics["failure_stage"] == "selection"
+    assert diagnostics["stop_reason"] == stop_reason
+    assert diagnostics["recovery_skip_reason"] is None
+    if issues is None:
+        assert diagnostics["validation_errors"] is None
+    else:
+        assert _issues(diagnostics) == issues
+
+
+def test_model_generated_content_cannot_leak_through_diagnostics(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    _setup_env(tmp_path, monkeypatch)
+    key_marker = "EVIL-KEY-MARKER"
+    value_marker = "EVIL-VALUE-MARKER"
+    findings = [c.model_dump() for c in _CANDIDATES[:4]]
+    findings[1][f"{key_marker}_in_finding"] = value_marker
+    findings[3]["title"] = "   "  # also invalid, to exercise a known-field error
+    text = json.dumps({"findings": findings, key_marker: value_marker})
+    _install_fake(monkeypatch, _message(text))
+
+    assert _run_cli() == 1
+
+    err = capsys.readouterr().err
+    assert key_marker not in err
+    assert value_marker not in err
+    assert "input_value" not in err
+    assert "Failure stage: initial" in err
+    assert "Stop reason: end_turn" in err
+    assert "Recovery skip reason: candidate_validation_failed" in err
+    assert "candidate_report:findings.1.<unknown field> (extra_forbidden)" in err
+    assert "candidate_report:<unknown field> (extra_forbidden)" in err
+    assert "candidate_report:findings.3.title (value_error)" in err
+
+    # The structured form is equally clean.
+    _install_fake(monkeypatch, _message(text))
+    with pytest.raises(expert.ExpertError) as exc_info:
+        _run()
+    serialized = json.dumps(_diagnostics(exc_info)) + str(exc_info.value)
+    assert key_marker not in serialized
+    assert value_marker not in serialized
+    for candidate in _CANDIDATES:
+        assert candidate.observation not in serialized
+
+
+def test_cli_success_prints_no_diagnostics(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    _setup_env(tmp_path, monkeypatch)
+    _install_fake(monkeypatch, _message(_report_json([_VALID_FINDING])))
+
+    assert _run_cli() == 0
+    out = capsys.readouterr()
+    assert json.loads(out.out) == {"findings": [_VALID_FINDING.model_dump()]}
+    assert "Failure stage" not in out.err

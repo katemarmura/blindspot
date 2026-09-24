@@ -86,6 +86,16 @@ stderr reports whether recovery was attempted, the number of model calls, and in
 tokens summed across both calls; if a call returned no usage (e.g. an API error), the
 totals are marked incomplete rather than counted as zero.
 
+**Failure diagnostics.** On failure, stderr also shows the failure stage (`initial` or
+`selection`), the response's stop reason (`n/a` if no response arrived), why recovery was
+skipped, and validation errors as `schema:location (pydantic error type)`. The skip reason is
+one of `no_response`, `response_not_end_turn`, `no_text_output`, `malformed_json`,
+`candidate_validation_failed`, or `within_finding_limit`. When a report has too many findings,
+validation reports only the count error, so the findings are also checked without the limit.
+That way an invalid finding hidden behind the count error is still reported. Field names the
+schema doesn't define appear as `<unknown field>`, since they come from the model. Raw output
+and input values are never shown.
+
 #### Multi-expert runner
 
 ```bash
@@ -104,7 +114,7 @@ overall `status` (`success` if every expert succeeded, `partial` if some did, `f
 none did — zero findings counts as success) and an `experts` list in input order, each
 with its perspective, status, elapsed seconds, the model ID the API returned (`null` only
 if no response arrived, so a truncated or invalid failure still shows it), either the
-report or a sanitized error, plus that expert's usage (calls, whether recovery ran, tokens, and
+report or a sanitized error and `diagnostics` (as above; `null` on success), plus that expert's usage (calls, whether recovery ran, tokens, and
 whether usage is incomplete). Findings are reported per expert as-is: not merged, ranked,
 or deduplicated. stderr gets a summary of calls, summed tokens (marked incomplete where a
 call returned no usage), and total elapsed time. Exit code is 0 only if every expert
@@ -138,7 +148,7 @@ Each comparison gets its own directory, `runs/<UTC timestamp>-<random suffix>/` 
   the git revision and dirty status (`null` if unavailable).
 - `run-<order>-rep<n>-<model>.json`: one file per run, written as soon as that run finishes.
   Each holds the repetition and execution order, the requested and returned model IDs,
-  success/failure, the validated report or a sanitized error, elapsed time, call count,
+  success/failure, the validated report or a sanitized error and its `diagnostics`, elapsed time, call count,
   whether recovery ran, known token usage, and whether that usage is incomplete. Unknown
   values are `null`.
 

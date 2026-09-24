@@ -16,7 +16,7 @@ import asyncio
 import json
 import sys
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Literal
 
 import anthropic
 import pydantic
@@ -100,6 +100,56 @@ class UsageSummary:
         self.output_tokens += response.usage.output_tokens
 
 
+FailureStage = Literal["initial", "selection"]
+
+# Why the bounded recovery was not attempted after an initial-stage failure.
+RecoverySkipReason = Literal[
+    "no_response",  # the API call failed before any response arrived
+    "response_not_end_turn",  # the response did not end normally (see stop_reason)
+    "no_text_output",  # the response had no text block
+    "malformed_json",  # the text was not valid JSON
+    "candidate_validation_failed",  # invalid beyond the finding-count limit
+    "within_finding_limit",  # defensive: no count violation to recover from
+]
+
+ValidationSchema = Literal["expert_report", "candidate_report", "selection"]
+
+
+@dataclass(frozen=True)
+class ValidationIssue:
+    """One sanitized validation error: which schema, where, and pydantic's error type."""
+
+    schema: ValidationSchema
+    loc: str
+    type: str
+
+
+@dataclass(frozen=True)
+class FailureDiagnostics:
+    """Structured, content-free facts about why an expert run failed.
+
+    Fields that don't apply are None. Built from the failure itself, never by
+    parsing the human-readable error message.
+    """
+
+    failure_stage: FailureStage
+    stop_reason: str | None = None
+    recovery_skip_reason: RecoverySkipReason | None = None
+    validation_errors: tuple[ValidationIssue, ...] | None = None
+
+    def to_json(self) -> dict[str, Any]:
+        return {
+            "failure_stage": self.failure_stage,
+            "stop_reason": self.stop_reason,
+            "recovery_skip_reason": self.recovery_skip_reason,
+            "validation_errors": (
+                [{"schema": i.schema, "loc": i.loc, "type": i.type} for i in self.validation_errors]
+                if self.validation_errors is not None
+                else None
+            ),
+        }
+
+
 class ExpertError(Exception):
     """Raised when an expert run fails: refusal, truncation, invalid output, or an API error.
 
@@ -107,6 +157,8 @@ class ExpertError(Exception):
     run failed before making one). `returned_model` is the model ID reported
     by the initial response when one was received (None if the failure
     happened before any response, e.g. an API error on the initial call).
+    `diagnostics` gives the failing stage, stop reason, why recovery was
+    skipped, and sanitized validation errors (set by `run_expert`).
     """
 
     def __init__(
@@ -114,22 +166,48 @@ class ExpertError(Exception):
         message: str,
         usage: UsageSummary | None = None,
         returned_model: str | None = None,
+        diagnostics: FailureDiagnostics | None = None,
     ) -> None:
         super().__init__(message)
         self.usage = usage
         self.returned_model = returned_model
+        self.diagnostics = diagnostics
+
+
+# Field names defined by our own schemas. Any other name in an error location
+# (e.g. an unexpected key the model emitted) is model-generated and replaced.
+_KNOWN_FIELDS = frozenset(
+    {*ExpertReport.model_fields, *Finding.model_fields, *_Selection.model_fields}
+)
+_UNKNOWN_FIELD = "<unknown field>"
+
+
+def _sanitize_loc(loc: tuple[int | str, ...]) -> str:
+    parts = [
+        str(part) if isinstance(part, int) or part in _KNOWN_FIELDS else _UNKNOWN_FIELD
+        for part in loc
+    ]
+    return ".".join(parts) if parts else "<root>"
+
+
+def _errors(exc: pydantic.ValidationError) -> list[Any]:
+    # Never include `input` — it holds raw model output.
+    return exc.errors(include_url=False, include_context=False, include_input=False)
 
 
 def _describe_validation_error(exc: pydantic.ValidationError) -> str:
-    """Summarize a ValidationError by field location and message only.
-
-    Never includes `input_value` — pydantic's default error rendering embeds
-    the raw value that failed validation, which here comes from model
-    output and must not reach logs/stderr unsanitized.
-    """
-    details = exc.errors(include_url=False, include_context=False, include_input=False)
-    parts = [f"{'.'.join(str(part) for part in d['loc'])}: {d['msg']}" for d in details]
+    """Summarize a ValidationError by sanitized field location and message only."""
+    parts = [f"{_sanitize_loc(d['loc'])}: {d['msg']}" for d in _errors(exc)]
     return "; ".join(parts) if parts else "no details available"
+
+
+def _validation_issues(
+    schema: ValidationSchema, exc: pydantic.ValidationError
+) -> tuple[ValidationIssue, ...]:
+    return tuple(
+        ValidationIssue(schema=schema, loc=_sanitize_loc(d["loc"]), type=d["type"])
+        for d in _errors(exc)
+    )
 
 
 @dataclass(frozen=True)
@@ -148,9 +226,14 @@ async def _call(
     system: str,
     user_content: str,
     output_schema: type[BaseModel],
+    stage: FailureStage,
 ) -> Message:
     """Make one non-streaming model call, counting it and recording its usage if returned."""
     usage.model_calls += 1
+    diagnostics = FailureDiagnostics(
+        failure_stage=stage,
+        recovery_skip_reason="no_response" if stage == "initial" else None,
+    )
     try:
         response = await client.messages.create(
             model=model,
@@ -160,25 +243,40 @@ async def _call(
             output_config=_output_config(output_schema),
         )
     except anthropic.AuthenticationError as exc:
-        raise ExpertError(f"Authentication error: {exc.message}", usage) from exc
+        message = f"Authentication error: {exc.message}"
+        raise ExpertError(message, usage, diagnostics=diagnostics) from exc
     except anthropic.RateLimitError as exc:
-        raise ExpertError(f"Rate-limit error: {exc.message}", usage) from exc
+        message = f"Rate-limit error: {exc.message}"
+        raise ExpertError(message, usage, diagnostics=diagnostics) from exc
     except anthropic.APIConnectionError as exc:
-        raise ExpertError(f"Connection error: {exc}", usage) from exc
+        raise ExpertError(f"Connection error: {exc}", usage, diagnostics=diagnostics) from exc
     except anthropic.APIStatusError as exc:
-        raise ExpertError(f"API error ({exc.status_code}): {exc.message}", usage) from exc
+        message = f"API error ({exc.status_code}): {exc.message}"
+        raise ExpertError(message, usage, diagnostics=diagnostics) from exc
     usage.record(response)
     return response
 
 
-def _check_stop_reason(response: Message, usage: UsageSummary, prefix: str = "") -> None:
+def _check_stop_reason(
+    response: Message, usage: UsageSummary, stage: FailureStage, prefix: str = ""
+) -> None:
+    diagnostics = FailureDiagnostics(
+        failure_stage=stage,
+        stop_reason=response.stop_reason,
+        recovery_skip_reason="response_not_end_turn" if stage == "initial" else None,
+    )
     if response.stop_reason == "refusal":
-        raise ExpertError(f"{prefix}The model declined to respond to this request.", usage)
+        raise ExpertError(
+            f"{prefix}The model declined to respond to this request.",
+            usage,
+            diagnostics=diagnostics,
+        )
     if response.stop_reason == "max_tokens":
         raise ExpertError(
             f"{prefix}The model response was truncated before completion "
             "(max output tokens reached).",
             usage,
+            diagnostics=diagnostics,
         )
 
 
@@ -217,22 +315,39 @@ async def _select_findings(
         system=SELECTION_SYSTEM_PROMPT,
         user_content=user_content,
         output_schema=_Selection,
+        stage="selection",
     )
-    _check_stop_reason(response, usage, prefix="Finding selection failed: ")
+    _check_stop_reason(response, usage, "selection", prefix="Finding selection failed: ")
+
+    def failure(message: str, issues: tuple[ValidationIssue, ...] | None = None) -> ExpertError:
+        diagnostics = FailureDiagnostics(
+            failure_stage="selection",
+            stop_reason=response.stop_reason,
+            validation_errors=issues,
+        )
+        return ExpertError(message, usage, diagnostics=diagnostics)
 
     text = _response_text(response)
     if text is None:
-        raise ExpertError("Finding selection returned no output.", usage)
+        raise failure("Finding selection returned no output.")
     try:
         selection = _Selection.model_validate_json(text)
     except pydantic.ValidationError as exc:
         details = _describe_validation_error(exc)
-        raise ExpertError(f"Finding selection was invalid ({details})", usage) from exc
+        issues = _validation_issues("selection", exc)
+        raise failure(f"Finding selection was invalid ({details})", issues) from exc
 
-    if any(not 0 <= i < len(candidates) for i in selection.selected_indices):
-        raise ExpertError(
+    out_of_range = tuple(
+        ValidationIssue(
+            schema="selection", loc=f"selected_indices.{pos}", type="index_out_of_range"
+        )
+        for pos, i in enumerate(selection.selected_indices)
+        if not 0 <= i < len(candidates)
+    )
+    if out_of_range:
+        raise failure(
             f"Finding selection was invalid (index out of range for {len(candidates)} candidates)",
-            usage,
+            out_of_range,
         )
 
     # Built from the original Finding objects, so wording is preserved exactly.
@@ -240,22 +355,29 @@ async def _select_findings(
         return ExpertReport(findings=[candidates[i] for i in selection.selected_indices])
     except pydantic.ValidationError as exc:
         details = _describe_validation_error(exc)
-        raise ExpertError(f"Selected report was invalid ({details})", usage) from exc
+        issues = _validation_issues("expert_report", exc)
+        raise failure(f"Selected report was invalid ({details})", issues) from exc
 
 
-def _recoverable_candidates(response: Message, text: str) -> list[Finding] | None:
-    """Return the candidate findings if the only problem is too many of them.
+def _recovery_skip_reason(
+    response: Message,
+    candidates: list[Finding] | None,
+    candidate_error: pydantic.ValidationError | None,
+) -> RecoverySkipReason | None:
+    """Why recovery can't run, or None if it can.
 
     Recovery applies only to a normally completed response whose findings
     all satisfy `Finding` and whose sole schema violation is the count.
     """
     if response.stop_reason != "end_turn":
-        return None
-    try:
-        candidates = _CandidateReport.model_validate_json(text).findings
-    except pydantic.ValidationError:
-        return None
-    return candidates if len(candidates) > MAX_FINDINGS else None
+        return "response_not_end_turn"
+    if candidate_error is not None:
+        if any(d["type"] == "json_invalid" for d in _errors(candidate_error)):
+            return "malformed_json"
+        return "candidate_validation_failed"
+    if candidates is None or len(candidates) <= MAX_FINDINGS:
+        return "within_finding_limit"
+    return None
 
 
 async def _report_from_response(
@@ -267,22 +389,58 @@ async def _report_from_response(
     usage: UsageSummary,
 ) -> ExpertReport:
     """Validate the initial response, running the bounded recovery if it applies."""
-    _check_stop_reason(response, usage)
+    _check_stop_reason(response, usage, "initial")
 
     text = _response_text(response)
     if text is None:
-        raise ExpertError("The model did not return output matching the expected schema.", usage)
+        raise ExpertError(
+            "The model did not return output matching the expected schema.",
+            usage,
+            diagnostics=FailureDiagnostics(
+                failure_stage="initial",
+                stop_reason=response.stop_reason,
+                recovery_skip_reason="no_text_output",
+            ),
+        )
 
     try:
         return ExpertReport.model_validate_json(text)
     except pydantic.ValidationError as exc:
-        candidates = _recoverable_candidates(response, text)
-        if candidates is None:
-            details = _describe_validation_error(exc)
-            raise ExpertError(
-                f"Model output did not match the expected schema ({details})", usage
-            ) from exc
-    return await _select_findings(client, model, plan, perspective, candidates, usage)
+        report_error = exc
+
+    # The bounded `ExpertReport` stops at the count violation and hides
+    # per-finding errors, so validate without the limit to see them too.
+    candidates: list[Finding] | None = None
+    candidate_error: pydantic.ValidationError | None = None
+    try:
+        candidates = _CandidateReport.model_validate_json(text).findings
+    except pydantic.ValidationError as exc:
+        candidate_error = exc
+
+    skip_reason = _recovery_skip_reason(response, candidates, candidate_error)
+    if skip_reason is None and candidates is not None:
+        return await _select_findings(client, model, plan, perspective, candidates, usage)
+
+    issues = _validation_issues("expert_report", report_error)
+    report_details = _describe_validation_error(report_error)
+    message = f"Model output did not match the expected schema ({report_details})"
+    if candidate_error is not None:
+        issues += _validation_issues("candidate_report", candidate_error)
+        # Skip repeating an identical summary (e.g. malformed JSON fails both the same way).
+        candidate_details = _describe_validation_error(candidate_error)
+        if candidate_details != report_details:
+            message += f"; candidate findings also invalid ({candidate_details})"
+    message += f"; recovery not attempted: {skip_reason}"
+    raise ExpertError(
+        message,
+        usage,
+        diagnostics=FailureDiagnostics(
+            failure_stage="initial",
+            stop_reason=response.stop_reason,
+            recovery_skip_reason=skip_reason,
+            validation_errors=issues,
+        ),
+    ) from report_error
 
 
 async def run_expert(plan: str, perspective: str, *, model: str | None = None) -> ExpertRun:
@@ -326,6 +484,7 @@ async def run_expert(plan: str, perspective: str, *, model: str | None = None) -
             system=EXPERT_SYSTEM_PROMPT,
             user_content=user_content,
             output_schema=ExpertReport,
+            stage="initial",
         )
         try:
             report = await _report_from_response(client, model, plan, perspective, response, usage)
@@ -362,6 +521,18 @@ def _print_usage(usage: UsageSummary) -> None:
     print(f"Output tokens: {usage.output_tokens}{note}", file=sys.stderr)
 
 
+def _print_diagnostics(diagnostics: FailureDiagnostics) -> None:
+    def show(value: object) -> str:
+        return "n/a" if value is None else str(value)
+
+    print(f"Failure stage: {diagnostics.failure_stage}", file=sys.stderr)
+    print(f"Stop reason: {show(diagnostics.stop_reason)}", file=sys.stderr)
+    print(f"Recovery skip reason: {show(diagnostics.recovery_skip_reason)}", file=sys.stderr)
+    if diagnostics.validation_errors:
+        issues = "; ".join(f"{i.schema}:{i.loc} ({i.type})" for i in diagnostics.validation_errors)
+        print(f"Validation errors: {issues}", file=sys.stderr)
+
+
 async def _run(plan: str, perspective: str) -> int:
     try:
         run = await run_expert(plan, perspective)
@@ -370,6 +541,8 @@ async def _run(plan: str, perspective: str) -> int:
         return 1
     except ExpertError as exc:
         print(f"Error: {exc}", file=sys.stderr)
+        if exc.diagnostics is not None:
+            _print_diagnostics(exc.diagnostics)
         if exc.usage is not None:
             _print_usage(exc.usage)
         return 1

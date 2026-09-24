@@ -10,7 +10,7 @@ import pytest
 from anthropic.types import Message, StopReason, TextBlock, Usage
 
 from blindspot import pipeline
-from blindspot.expert import ExpertError, ExpertRun, UsageSummary
+from blindspot.expert import ExpertError, ExpertRun, FailureDiagnostics, UsageSummary
 from blindspot.schemas import ExpertReport, Finding
 
 _PLAN = "Open a coffee shop in Warsaw."
@@ -320,6 +320,7 @@ def _mixed_handler() -> FakeExpert:
                     output_tokens=1200,
                 ),
                 returned_model=_MODEL,  # the initial response did arrive
+                diagnostics=FailureDiagnostics(failure_stage="selection"),
             )
         return _run_for(perspective, input_tokens=100, output_tokens=50)
 
@@ -353,6 +354,13 @@ def test_cli_partial_prints_ordered_json_and_aggregated_usage(
     }
     assert operations["report"] is None
     assert operations["model"] == _MODEL
+    assert operations["diagnostics"] == {
+        "failure_stage": "selection",
+        "stop_reason": None,
+        "recovery_skip_reason": None,
+        "validation_errors": None,
+    }
+    assert financial["diagnostics"] is None
     assert operations["error"] == "Authentication error: invalid x-api-key"
     assert operations["usage"]["usage_incomplete"] is True
     assert legal["usage"]["model_calls"] == 1
@@ -468,3 +476,10 @@ def test_cli_truncated_expert_keeps_returned_model(
     assert operations["model"] == f"{_MODEL}-20260101"
     assert operations["report"] is None
     assert '{"findings": [' not in out
+    assert operations["diagnostics"] == {
+        "failure_stage": "initial",
+        "stop_reason": "max_tokens",
+        "recovery_skip_reason": "response_not_end_turn",
+        "validation_errors": None,
+    }
+    assert financial["diagnostics"] is None

@@ -56,7 +56,15 @@ What exists:
   so totals are marked incomplete rather than treated as zero. `ExpertError.returned_model`
   holds the initial response's model ID for any failure after a response arrived
   (truncation, refusal, invalid output, failed recovery); it is `None` only when no response
-  was received. This is a single fixed
+  was received. `ExpertError.diagnostics` (`FailureDiagnostics`) records `failure_stage`,
+  the failing response's `stop_reason` (None if no response arrived), `recovery_skip_reason`
+  (initial stage only), and `validation_errors` as `ValidationIssue(schema, loc, type)`.
+  These come from the failure itself, never by parsing messages. For initial validation
+  failures, `_CandidateReport` errors are included alongside `ExpertReport`'s, because the
+  bounded schema reports only `too_long` and hides per-finding errors. Locations pass
+  through `_sanitize_loc`: names outside our schemas become `<unknown field>`, in both
+  diagnostics and messages. `compare` and `pipeline` save `diagnostics` per failed run
+  (`null` on success). This is a single fixed
   recovery step — not generic retry infrastructure; don't generalize it.
 - `src/blindspot/pipeline.py` — `run_pipeline(plan, perspectives)`: validates the plan,
   1–3 perspectives (trimmed, nonblank, case-insensitively unique), and config before any

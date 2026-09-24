@@ -453,7 +453,12 @@ def test_saved_files_contain_no_credentials_or_raw_invalid_output(
     assert ok["returned_model"] == f"{_MODEL_A}-20260101"
     assert failed["status"] == "failed"
     assert failed["returned_model"] == f"{_MODEL_B}-20260101"
-    assert "leaked_field" in failed["error"]
+    assert "leaked_field" not in saved_text
+    assert "<unknown field>: Extra inputs are not permitted" in failed["error"]
+    assert failed["diagnostics"]["validation_errors"] == [
+        {"schema": "expert_report", "loc": "<unknown field>", "type": "extra_forbidden"},
+        {"schema": "candidate_report", "loc": "<unknown field>", "type": "extra_forbidden"},
+    ]
 
 
 def test_truncated_run_keeps_returned_model(
@@ -476,7 +481,14 @@ def test_truncated_run_keeps_returned_model(
     assert truncated["returned_model"] == f"{_MODEL_A}-20260101"
     assert truncated["report"] is None
     assert '{"findings": [' not in json.dumps(truncated)
+    assert truncated["diagnostics"] == {
+        "failure_stage": "initial",
+        "stop_reason": "max_tokens",
+        "recovery_skip_reason": "response_not_end_turn",
+        "validation_errors": None,
+    }
     assert ok["returned_model"] == f"{_MODEL_B}-20260101"
+    assert ok["diagnostics"] is None
 
 
 def test_returned_model_is_null_when_no_response_was_received(
@@ -490,3 +502,31 @@ def test_returned_model_is_null_when_no_response_was_received(
     assert failed["status"] == "failed"
     assert failed["returned_model"] is None
     assert failed["usage"]["usage_incomplete"] is True
+    assert failed["diagnostics"]["stop_reason"] is None
+    assert failed["diagnostics"]["recovery_skip_reason"] == "no_response"
+
+
+def test_saved_run_keeps_candidate_validation_diagnostics(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    findings = [_finding(_MODEL_A).model_dump() for _ in range(4)]
+    findings[2]["title"] = " "
+    _install_client(
+        monkeypatch,
+        (json.dumps({"findings": findings}), "end_turn"),
+        (_VALID_TEXT, "end_turn"),
+    )
+
+    assert compare.main(_argv()) == 1
+
+    failed, _ = _run_files(_comparison_dir(tmp_path))
+    assert failed["usage"]["recovery_attempted"] is False
+    assert failed["diagnostics"] == {
+        "failure_stage": "initial",
+        "stop_reason": "end_turn",
+        "recovery_skip_reason": "candidate_validation_failed",
+        "validation_errors": [
+            {"schema": "expert_report", "loc": "findings", "type": "too_long"},
+            {"schema": "candidate_report", "loc": "findings.2.title", "type": "value_error"},
+        ],
+    }

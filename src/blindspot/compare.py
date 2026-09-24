@@ -33,6 +33,7 @@ from blindspot.expert import (
     SELECTION_MAX_OUTPUT_TOKENS,
     ExpertError,
     ExpertRun,
+    FailureDiagnostics,
     UsageSummary,
     request_output_schemas,
     run_expert,
@@ -64,6 +65,8 @@ class RunRecord:
     failed_usage: UsageSummary | None = None
     # On failure, the model ID from a received response, if any.
     failed_returned_model: str | None = None
+    # On failure, structured diagnostics from the ExpertError; None on success.
+    failed_diagnostics: FailureDiagnostics | None = None
 
     @property
     def status(self) -> Literal["success", "failed"]:
@@ -197,6 +200,9 @@ def _record_json(record: RunRecord) -> dict[str, Any]:
         "elapsed_seconds": round(record.elapsed_seconds, 3),
         "report": run.report.model_dump() if run is not None else None,
         "error": record.error,
+        "diagnostics": (
+            record.failed_diagnostics.to_json() if record.failed_diagnostics is not None else None
+        ),
         "usage": _usage_json(record.usage),
     }
 
@@ -225,6 +231,7 @@ async def _run_one(
             error=str(exc),
             failed_usage=exc.usage,
             failed_returned_model=exc.returned_model,
+            failed_diagnostics=exc.diagnostics,
         )
     return RunRecord(
         repetition=repetition,

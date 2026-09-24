@@ -20,7 +20,13 @@ from dataclasses import dataclass
 from typing import Any, Literal
 
 from blindspot.config import get_anthropic_api_key, get_anthropic_model
-from blindspot.expert import ExpertError, ExpertRun, UsageSummary, run_expert
+from blindspot.expert import (
+    ExpertError,
+    ExpertRun,
+    FailureDiagnostics,
+    UsageSummary,
+    run_expert,
+)
 
 MAX_PERSPECTIVES = 3
 
@@ -42,6 +48,8 @@ class ExpertOutcome:
     # On failure, the model ID from a received response (None if no response
     # arrived). On success, `run.model`.
     failed_returned_model: str | None = None
+    # On failure, structured diagnostics from the ExpertError; None on success.
+    failed_diagnostics: FailureDiagnostics | None = None
 
     @property
     def status(self) -> ExpertStatus:
@@ -101,6 +109,7 @@ async def _run_one(plan: str, perspective: str) -> ExpertOutcome:
             error=str(exc),
             failed_usage=exc.usage,
             failed_returned_model=exc.returned_model,
+            failed_diagnostics=exc.diagnostics,
         )
     return ExpertOutcome(perspective=perspective, elapsed_seconds=time.monotonic() - start, run=run)
 
@@ -151,6 +160,9 @@ def _outcome_json(outcome: ExpertOutcome) -> dict[str, Any]:
         "model": outcome.returned_model,
         "report": run.report.model_dump() if run is not None else None,
         "error": outcome.error,
+        "diagnostics": (
+            outcome.failed_diagnostics.to_json() if outcome.failed_diagnostics is not None else None
+        ),
         "usage": _usage_json(outcome.usage),
     }
 

@@ -26,3 +26,6 @@ wheels/
 
 # Claude Code local (machine-specific) settings
 .claude/settings.local.json
+
+# Saved model-comparison results (contain plans and generated findings)
+runs/

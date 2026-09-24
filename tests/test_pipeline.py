@@ -3,8 +3,11 @@ import json
 import os
 from collections.abc import Awaitable, Callable, Iterator
 from pathlib import Path
+from typing import Any
 
+import anthropic
 import pytest
+from anthropic.types import Message, StopReason, TextBlock, Usage
 
 from blindspot import pipeline
 from blindspot.expert import ExpertError, ExpertRun, UsageSummary
@@ -316,6 +319,7 @@ def _mixed_handler() -> FakeExpert:
                     input_tokens=900,
                     output_tokens=1200,
                 ),
+                returned_model=_MODEL,  # the initial response did arrive
             )
         return _run_for(perspective, input_tokens=100, output_tokens=50)
 
@@ -348,7 +352,7 @@ def test_cli_partial_prints_ordered_json_and_aggregated_usage(
         "usage_incomplete": False,
     }
     assert operations["report"] is None
-    assert operations["model"] is None
+    assert operations["model"] == _MODEL
     assert operations["error"] == "Authentication error: invalid x-api-key"
     assert operations["usage"]["usage_incomplete"] is True
     assert legal["usage"]["model_calls"] == 1
@@ -387,6 +391,7 @@ def test_cli_all_failed_exits_nonzero(
     out = capsys.readouterr()
     data = json.loads(out.out)
     assert data["status"] == "failed"
+    assert data["experts"][0]["model"] is None  # no response was received
     assert data["experts"][0]["usage"]["usage_incomplete"] is True
     assert "Input tokens: 0 (incomplete: usage unavailable for 1 of 1 calls)" in out.err
 
@@ -401,3 +406,65 @@ def test_cli_invalid_input_exits_nonzero_without_running(
     assert out.out == ""
     assert "duplicate perspective" in out.err
     assert recorder.calls == []
+
+
+# --- End to end through the real run_expert, with a fake Anthropic client ---
+
+
+class _FakeMessages:
+    """Responds per perspective; responses report a dated model ID."""
+
+    def __init__(self, stop_reasons: dict[str, StopReason]) -> None:
+        self._stop_reasons = stop_reasons
+
+    async def create(self, **kwargs: Any) -> Message:
+        content = kwargs["messages"][0]["content"]
+        perspective = content.rsplit("Perspective:\n", 1)[1]
+        stop_reason = self._stop_reasons[perspective]
+        text = (
+            json.dumps({"findings": [_finding(perspective).model_dump()]})
+            if stop_reason == "end_turn"
+            else '{"findings": ['
+        )
+        return Message(
+            id="msg_test",
+            type="message",
+            role="assistant",
+            model=f"{kwargs['model']}-20260101",
+            content=[TextBlock(type="text", text=text)],
+            stop_reason=stop_reason,
+            stop_sequence=None,
+            usage=Usage(input_tokens=10, output_tokens=5),
+        )
+
+
+class _FakeClient:
+    def __init__(self, messages: _FakeMessages) -> None:
+        self.messages = messages
+
+    async def __aenter__(self) -> "_FakeClient":
+        return self
+
+    async def __aexit__(self, *exc_info: object) -> bool:
+        return False
+
+
+def test_cli_truncated_expert_keeps_returned_model(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # Regression: a failed expert used to report "model": null even when a
+    # response (here, a truncated one) had been received.
+    messages = _FakeMessages({"Financial": "end_turn", "Operations": "max_tokens"})
+    monkeypatch.setattr(anthropic, "AsyncAnthropic", lambda **_: _FakeClient(messages))
+
+    assert pipeline.main(_cli(["Financial", "Operations"])) != 0
+
+    out = capsys.readouterr().out
+    financial, operations = json.loads(out)["experts"]
+    assert financial["status"] == "success"
+    assert financial["model"] == f"{_MODEL}-20260101"
+    assert operations["status"] == "failed"
+    assert "truncated" in operations["error"]
+    assert operations["model"] == f"{_MODEL}-20260101"
+    assert operations["report"] is None
+    assert '{"findings": [' not in out

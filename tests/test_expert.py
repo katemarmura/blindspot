@@ -535,3 +535,85 @@ def test_recovery_never_exceeds_two_calls_even_if_more_are_available(
     with pytest.raises(expert.ExpertError):
         _run()
     assert len(fake.calls) == 2
+
+
+# --- Explicit model override ---
+
+
+def test_model_override_is_used_for_both_calls_without_anthropic_model(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _setup_env(tmp_path, monkeypatch)
+    monkeypatch.delenv("ANTHROPIC_MODEL")
+    fake = _install_fake(
+        monkeypatch,
+        _message(_report_json(_CANDIDATES)),
+        _selection_message([0]),
+    )
+
+    run = asyncio.run(expert.run_expert(_PLAN, _PERSPECTIVE, model=" claude-override "))
+
+    assert [call["model"] for call in fake.calls] == ["claude-override", "claude-override"]
+    assert run.usage.model_calls == 2
+    assert os.environ.get("ANTHROPIC_MODEL") is None
+
+
+def test_no_override_keeps_configured_model(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _setup_env(tmp_path, monkeypatch)
+    fake = _install_fake(monkeypatch, _message(_report_json(_CANDIDATES)), _selection_message([0]))
+
+    _run()
+
+    assert [call["model"] for call in fake.calls] == [_MODEL, _MODEL]
+
+
+def test_blank_model_override_is_rejected_before_any_call(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _setup_env(tmp_path, monkeypatch)
+    fake = _install_fake(monkeypatch)
+
+    with pytest.raises(ValueError, match="model"):
+        asyncio.run(expert.run_expert(_PLAN, _PERSPECTIVE, model="  "))
+    assert fake.calls == []
+
+
+# --- Returned model on failure ---
+
+
+def test_truncation_error_carries_returned_model(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _setup_env(tmp_path, monkeypatch)
+    _install_fake(monkeypatch, _message('{"findings": [', stop_reason="max_tokens"))
+
+    with pytest.raises(expert.ExpertError, match="truncated") as exc_info:
+        _run()
+
+    assert exc_info.value.returned_model == _MODEL
+
+
+def test_failed_recovery_error_carries_returned_model(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _setup_env(tmp_path, monkeypatch)
+    _install_fake(monkeypatch, _message(_report_json(_CANDIDATES)), _api_error())
+
+    with pytest.raises(expert.ExpertError) as exc_info:
+        _run()
+
+    assert exc_info.value.returned_model == _MODEL
+
+
+def test_initial_api_error_has_no_returned_model(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _setup_env(tmp_path, monkeypatch)
+    _install_fake(monkeypatch, _api_error())
+
+    with pytest.raises(expert.ExpertError) as exc_info:
+        _run()
+
+    assert exc_info.value.returned_model is None

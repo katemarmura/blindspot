@@ -18,11 +18,12 @@ Full context, motivation, and design exploration live in
 [`docs/project-brief.md`](docs/project-brief.md). Treat that file as the source of truth
 for intent; treat this file as the quick orientation for how to work in the repo day to day.
 
-## Current scope: minimal server, a single-expert experiment, and a minimal multi-expert runner
+## Current scope: minimal server, a single-expert experiment, a minimal multi-expert runner, and a model-comparison CLI
 
 **As of now, this repository contains a project scaffold, a bare FastAPI server, and one
 small domain contract with one real LLM call (plus at most one bounded recovery call)
-built on it, run either alone or concurrently for 1–3 caller-supplied perspectives.**
+built on it, run either alone, concurrently for 1–3 caller-supplied perspectives, or
+across two named models for manual comparison.**
 There is still no LLM orchestrator, no `ExpertDefinition` abstraction, no dynamic team
 selection, no synthesis or cross-review, no pipeline state, and no persistence. Those are deliberately being designed before they are
 implemented (see the open questions in `docs/project-brief.md`).
@@ -52,20 +53,44 @@ What exists:
   recovered; a failed selection is an error, never a third call. `ExpertRun.usage` /
   `ExpertError.usage` (`UsageSummary`) carry call count, whether recovery was attempted,
   and tokens summed across calls; calls that returned no usage are counted separately
-  so totals are marked incomplete rather than treated as zero. This is a single fixed
+  so totals are marked incomplete rather than treated as zero. `ExpertError.returned_model`
+  holds the initial response's model ID for any failure after a response arrived
+  (truncation, refusal, invalid output, failed recovery); it is `None` only when no response
+  was received. This is a single fixed
   recovery step — not generic retry infrastructure; don't generalize it.
 - `src/blindspot/pipeline.py` — `run_pipeline(plan, perspectives)`: validates the plan,
   1–3 perspectives (trimmed, nonblank, case-insensitively unique), and config before any
   call, then runs `run_expert` once per perspective concurrently in an
   `asyncio.TaskGroup`. Each expert gets only the plan and its own perspective. Returns a
   `PipelineResult` of `ExpertOutcome`s in input order (success with `ExpertRun`, or a
-  sanitized `ExpertError` message plus whatever `UsageSummary` it carried; monotonic
+  sanitized `ExpertError` message plus whatever `UsageSummary` and `returned_model` it
+  carried; monotonic
   elapsed time) and an overall `success`/`partial`/`failed` status. Only `ExpertError` is
   captured per expert; any other exception cancels the siblings and propagates. No
   pipeline-level retries; findings are never merged, ranked, or deduplicated. Up to 3
   experts × (1 call + ≤1 recovery) = **at most six billable requests**. CLI:
   `uv run python -m blindspot.pipeline --plan "..." --perspective "..." [--perspective ...]`
   (JSON to stdout, usage summary + elapsed time to stderr, exit 0 only if all succeed).
+- `run_expert(..., *, model=None)`: an optional keyword-only override, used for both the
+  initial and recovery calls. When given, `ANTHROPIC_MODEL` isn't needed. The override never
+  mutates the environment. Omitted, the configured model is used as before.
+- `src/blindspot/compare.py`: a model-comparison CLI,
+  `uv run python -m blindspot.compare --plan ... --perspective ... --model A --model B [--repeats 1-3]`.
+  - It validates all arguments and the API key before creating anything.
+  - It runs `run_expert(model=...)` sequentially, alternating which model goes first each
+    repetition, with no comparison-level retries.
+  - It writes `runs/<id>/manifest.json` (plan, perspective, models, repeats, UTC time,
+    exact prompts, `request_output_schemas()`, limits, git revision and dirty flag or
+    `null`), then one `run-*.json` per run as soon as it completes. Files are written via a
+    temp file and rename, so an interruption never leaves a truncated file.
+  - Only `ExpertError` is recorded as a failure; bugs and cancellation propagate, and
+    earlier files are kept.
+  - It prints a per-model summary (successes/failures, recoveries, known tokens marked
+    `(incomplete)`, average elapsed) and exits nonzero if any run failed.
+  - Saved files contain the user's plan and the generated findings; `runs/` is git-ignored.
+  - At most 2 requests per run: 4 for one repetition, 12 for three.
+  - There is no quality scoring, no cost calculation, and no LLM judge. Small comparisons
+    are exploratory, not a model ranking.
 - `src/blindspot/llm_smoke.py` — the pre-existing connectivity-only diagnostic
   (`uv run python -m blindspot.llm_smoke`), unaffected by the above; still not part of
   the application.
@@ -87,7 +112,7 @@ discussion, not specifications to implement as-is.
 - **Config:** `src/blindspot/config.py` — `get_anthropic_api_key()` and
   `get_anthropic_model()` lazily load `ANTHROPIC_API_KEY` / `ANTHROPIC_MODEL` from `.env`
   (via `python-dotenv`) or the shell environment, no hardcoded model fallback. Only
-  `llm_smoke.py`, `expert.py`, and `pipeline.py` (an up-front check) call these; the FastAPI app doesn't, and doesn't need
+  `llm_smoke.py`, `expert.py`, and `pipeline.py`/`compare.py` (up-front checks) call these; the FastAPI app doesn't, and doesn't need
   either to run.
 - **Domain schema:** `src/blindspot/schemas.py` — `Finding` / `ExpertReport` (Pydantic).
   The first and only domain contract so far; see the scope note above for what it
@@ -112,6 +137,9 @@ discussion, not specifications to implement as-is.
   SDK calls are tested against a hand-written fake client/`messages` object, never the
   real network. `tests/test_pipeline.py` replaces `pipeline.run_expert` with a fake and
   uses `asyncio.Event`s (not timing thresholds) to prove overlap and completion order.
+  `tests/test_compare.py` replaces `compare.run_expert` the same way and works in a
+  `tmp_path` cwd, so `runs/` is created there. One end-to-end test goes through the real
+  `run_expert` with a fake Anthropic client.
 - **Layout:** `src/` layout — the package is `src/blindspot/`, importable only once
   installed (via `uv sync`), which avoids accidentally importing from the working
   directory instead of the installed package.

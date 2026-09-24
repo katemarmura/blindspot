@@ -39,10 +39,17 @@ class ExpertOutcome:
     # On failure, whatever usage the expert recorded before failing (None if
     # it failed before making a call). On success, `run.usage`.
     failed_usage: UsageSummary | None = None
+    # On failure, the model ID from a received response (None if no response
+    # arrived). On success, `run.model`.
+    failed_returned_model: str | None = None
 
     @property
     def status(self) -> ExpertStatus:
         return "success" if self.run is not None else "failed"
+
+    @property
+    def returned_model(self) -> str | None:
+        return self.run.model if self.run is not None else self.failed_returned_model
 
     @property
     def usage(self) -> UsageSummary | None:
@@ -93,6 +100,7 @@ async def _run_one(plan: str, perspective: str) -> ExpertOutcome:
             elapsed_seconds=time.monotonic() - start,
             error=str(exc),
             failed_usage=exc.usage,
+            failed_returned_model=exc.returned_model,
         )
     return ExpertOutcome(perspective=perspective, elapsed_seconds=time.monotonic() - start, run=run)
 
@@ -140,7 +148,7 @@ def _outcome_json(outcome: ExpertOutcome) -> dict[str, Any]:
         "perspective": outcome.perspective,
         "status": outcome.status,
         "elapsed_seconds": round(outcome.elapsed_seconds, 3),
-        "model": run.model if run is not None else None,
+        "model": outcome.returned_model,
         "report": run.report.model_dump() if run is not None else None,
         "error": outcome.error,
         "usage": _usage_json(outcome.usage),

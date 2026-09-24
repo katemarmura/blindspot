@@ -16,6 +16,7 @@ import asyncio
 import json
 import sys
 from dataclasses import dataclass
+from typing import Any
 
 import anthropic
 import pydantic
@@ -59,6 +60,14 @@ class _Selection(BaseModel):
         return value
 
 
+def request_output_schemas() -> dict[str, dict[str, Any]]:
+    """The exact JSON schemas sent as structured-output formats, for recording experiments."""
+    return {
+        "expert_report": anthropic.transform_schema(ExpertReport),
+        "selection": anthropic.transform_schema(_Selection),
+    }
+
+
 def _output_config(schema: type[BaseModel]) -> OutputConfigParam:
     # Same transformation `messages.parse(output_format=...)` applies, so the
     # request sent to the API is unchanged; validation is done locally instead,
@@ -95,12 +104,20 @@ class ExpertError(Exception):
     """Raised when an expert run fails: refusal, truncation, invalid output, or an API error.
 
     `usage` describes any model calls made before the failure (None if the
-    run failed before making one).
+    run failed before making one). `returned_model` is the model ID reported
+    by the initial response when one was received (None if the failure
+    happened before any response, e.g. an API error on the initial call).
     """
 
-    def __init__(self, message: str, usage: UsageSummary | None = None) -> None:
+    def __init__(
+        self,
+        message: str,
+        usage: UsageSummary | None = None,
+        returned_model: str | None = None,
+    ) -> None:
         super().__init__(message)
         self.usage = usage
+        self.returned_model = returned_model
 
 
 def _describe_validation_error(exc: pydantic.ValidationError) -> str:
@@ -241,14 +258,45 @@ def _recoverable_candidates(response: Message, text: str) -> list[Finding] | Non
     return candidates if len(candidates) > MAX_FINDINGS else None
 
 
-async def run_expert(plan: str, perspective: str) -> ExpertRun:
+async def _report_from_response(
+    client: anthropic.AsyncAnthropic,
+    model: str,
+    plan: str,
+    perspective: str,
+    response: Message,
+    usage: UsageSummary,
+) -> ExpertReport:
+    """Validate the initial response, running the bounded recovery if it applies."""
+    _check_stop_reason(response, usage)
+
+    text = _response_text(response)
+    if text is None:
+        raise ExpertError("The model did not return output matching the expected schema.", usage)
+
+    try:
+        return ExpertReport.model_validate_json(text)
+    except pydantic.ValidationError as exc:
+        candidates = _recoverable_candidates(response, text)
+        if candidates is None:
+            details = _describe_validation_error(exc)
+            raise ExpertError(
+                f"Model output did not match the expected schema ({details})", usage
+            ) from exc
+    return await _select_findings(client, model, plan, perspective, candidates, usage)
+
+
+async def run_expert(plan: str, perspective: str, *, model: str | None = None) -> ExpertRun:
     """Run one expert perspective over one plan and return a validated result.
+
+    `model` overrides `ANTHROPIC_MODEL` for both the initial and any recovery
+    call; when given, `ANTHROPIC_MODEL` need not be configured. Omitted, the
+    configured model is used as before.
 
     An `ExpertReport` with zero findings is a successful result, not an
     error. If the model returns more than three findings that are otherwise
     valid, one additional selection call picks up to three of them (see the
-    module docstring). Raises `ValueError` for a blank `plan`/`perspective`,
-    or `ExpertError` for a refusal, truncated response, output that fails
+    module docstring). Raises `ValueError` for a blank `plan`/`perspective`/
+    `model`, or `ExpertError` for a refusal, truncated response, output that fails
     `ExpertReport` validation (and is not recoverable), a failed recovery,
     or an Anthropic API error.
     """
@@ -256,9 +304,11 @@ async def run_expert(plan: str, perspective: str) -> ExpertRun:
         raise ValueError("plan must not be blank")
     if not perspective.strip():
         raise ValueError("perspective must not be blank")
+    if model is not None and not model.strip():
+        raise ValueError("model must not be blank")
 
     api_key = get_anthropic_api_key()
-    model = get_anthropic_model()
+    model = model.strip() if model is not None else get_anthropic_model()
     usage = UsageSummary()
 
     user_content = f"Plan:\n{plan}\n\nPerspective:\n{perspective}"
@@ -277,24 +327,13 @@ async def run_expert(plan: str, perspective: str) -> ExpertRun:
             user_content=user_content,
             output_schema=ExpertReport,
         )
-        _check_stop_reason(response, usage)
-
-        text = _response_text(response)
-        if text is None:
-            raise ExpertError(
-                "The model did not return output matching the expected schema.", usage
-            )
-
         try:
-            report = ExpertReport.model_validate_json(text)
-        except pydantic.ValidationError as exc:
-            candidates = _recoverable_candidates(response, text)
-            if candidates is None:
-                details = _describe_validation_error(exc)
-                raise ExpertError(
-                    f"Model output did not match the expected schema ({details})", usage
-                ) from exc
-            report = await _select_findings(client, model, plan, perspective, candidates, usage)
+            report = await _report_from_response(client, model, plan, perspective, response, usage)
+        except ExpertError as exc:
+            # A response was received, so its model ID is known even though the
+            # run failed (same source as `ExpertRun.model` on success).
+            exc.returned_model = response.model
+            raise
 
     return ExpertRun(report=report, model=response.model, usage=usage)
 

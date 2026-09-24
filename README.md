@@ -13,8 +13,9 @@ context and [`AGENTS.md`](AGENTS.md) for the current project scope.
 **Status:** minimal runnable FastAPI server with a health check, a first single-expert
 experiment (`blindspot.expert`) that makes one real, Pydantic-validated LLM call (plus at
 most one bounded recovery call — see below), and a minimal runner (`blindspot.pipeline`)
-that runs one to three explicitly named perspectives concurrently. No LLM orchestration,
-synthesis, cross-review, or persistence yet.
+that runs one to three explicitly named perspectives concurrently, plus a small
+model-comparison command (`blindspot.compare`). No LLM orchestration, synthesis,
+cross-review, or database yet.
 
 ## Requirements
 
@@ -101,8 +102,9 @@ anything is sent). Each expert sees only the plan and its own perspective, never
 expert's results, and there are no pipeline-level retries. stdout is one JSON object: an
 overall `status` (`success` if every expert succeeded, `partial` if some did, `failed` if
 none did — zero findings counts as success) and an `experts` list in input order, each
-with its perspective, status, elapsed seconds, and either the report and model ID or a
-sanitized error, plus that expert's usage (calls, whether recovery ran, tokens, and
+with its perspective, status, elapsed seconds, the model ID the API returned (`null` only
+if no response arrived, so a truncated or invalid failure still shows it), either the
+report or a sanitized error, plus that expert's usage (calls, whether recovery ran, tokens, and
 whether usage is incomplete). Findings are reported per expert as-is: not merged, ranked,
 or deduplicated. stderr gets a summary of calls, summed tokens (marked incomplete where a
 call returned no usage), and total elapsed time. Exit code is 0 only if every expert
@@ -110,6 +112,52 @@ succeeded.
 
 **Billing:** each expert makes one request plus at most one recovery request, so **three
 perspectives can make up to six billable requests.**
+
+#### Model comparison
+
+```bash
+uv run python -m blindspot.compare \
+  --plan "I want to open a small coffee shop in Warsaw." \
+  --perspective "Operations" \
+  --model "<first-model-id>" \
+  --model "<second-model-id>" \
+  --repeats 3
+```
+
+Runs the same plan and perspective through exactly two models you name, for manual side-by-side
+inspection. `--repeats` is 1–3 (default 1). All arguments (and `ANTHROPIC_API_KEY`) are checked
+before anything is sent; `ANTHROPIC_MODEL` is not needed, since `--model` overrides it. Runs are
+sequential and independent, and the model that goes first alternates each repetition. Prompts,
+schemas, token limits, timeouts, and the bounded recovery are the same as the single-expert
+command. There are no comparison-level retries.
+
+Each comparison gets its own directory, `runs/<UTC timestamp>-<random suffix>/` (git-ignored):
+
+- `manifest.json`: the plan, perspective, model IDs, repetition count, UTC creation time,
+  the exact expert and selection prompts, the output schemas sent, the request limits, and
+  the git revision and dirty status (`null` if unavailable).
+- `run-<order>-rep<n>-<model>.json`: one file per run, written as soon as that run finishes.
+  Each holds the repetition and execution order, the requested and returned model IDs,
+  success/failure, the validated report or a sanitized error, elapsed time, call count,
+  whether recovery ran, known token usage, and whether that usage is incomplete. Unknown
+  values are `null`.
+
+Completed files stay on disk if a later run fails or you interrupt the command. Credentials,
+request headers, and raw invalid model output are never saved. **The saved files contain the
+plan you supplied and the generated findings**, so treat `runs/` accordingly.
+
+A failing run (refusal, invalid output, API error) is recorded and the comparison continues.
+At the end, stdout shows per-model successes/failures, runs that needed recovery, known
+input/output token totals (marked `(incomplete)` where some usage is unknown), average elapsed
+time, and the results directory. The exit code is nonzero if any run failed. Output quality
+and cost aren't scored automatically; the files are for reading.
+
+**Billing:** each run makes one request plus at most one recovery request. One repetition
+across two models makes **at most four** billable requests; three repetitions make **at most
+twelve**.
+
+A comparison this small is exploratory. It can show differences worth a closer look, but it
+isn't evidence of a definitive ranking between models.
 
 ## Development commands
 
@@ -139,6 +187,7 @@ src/blindspot/schemas.py # Finding / ExpertReport Pydantic output schema
 src/blindspot/prompts.py # expert and finding-selection system prompts
 src/blindspot/expert.py  # single-expert async call (+ bounded selection recovery) + CLI
 src/blindspot/pipeline.py  # concurrent runner for 1–3 explicit perspectives + CLI
+src/blindspot/compare.py   # two-model comparison CLI (results saved under runs/)
 src/blindspot/llm_smoke.py  # connection smoke-check CLI
 tests/                   # pytest suite
 docs/                    # design notes and the original project brief

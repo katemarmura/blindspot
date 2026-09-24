@@ -10,9 +10,11 @@ This is a learning project for multi-agent systems, orchestration, and Python ba
 development. See [`docs/project-brief.md`](docs/project-brief.md) for the full design
 context and [`AGENTS.md`](AGENTS.md) for the current project scope.
 
-**Status:** minimal runnable FastAPI server with a health check, plus a first
-single-expert experiment (`blindspot.expert`) that makes one real, Pydantic-validated
-LLM call. No orchestration, multi-expert pipeline, or persistence yet.
+**Status:** minimal runnable FastAPI server with a health check, a first single-expert
+experiment (`blindspot.expert`) that makes one real, Pydantic-validated LLM call (plus at
+most one bounded recovery call — see below), and a minimal runner (`blindspot.pipeline`)
+that runs one to three explicitly named perspectives concurrently. No LLM orchestration,
+synthesis, cross-review, or persistence yet.
 
 ## Requirements
 
@@ -37,7 +39,7 @@ cp .env.example .env
 Then set `ANTHROPIC_API_KEY` and `ANTHROPIC_MODEL` in `.env` (pick a model ID you have
 access to — see [platform.claude.com/docs](https://platform.claude.com/docs) for current
 IDs). Run project commands from the repository root, so `.env` is found. `get_anthropic_api_key()`
-and `get_anthropic_model()` (`src/blindspot/config.py`) are only called by the two CLI
+and `get_anthropic_model()` (`src/blindspot/config.py`) are only called by the CLI
 scripts below, never by the server — `GET /health` works without either variable set.
 
 #### Anthropic connection smoke check
@@ -61,12 +63,53 @@ uv run python -m blindspot.expert \
 Sends the plan and perspective to the configured model with one fixed system prompt
 (`src/blindspot/prompts.py`), asking for zero to three findings. The response is
 validated against the `ExpertReport`/`Finding` Pydantic models (`src/blindspot/schemas.py`)
-before anything is printed. Validated JSON goes to stdout; the model ID and input/output
-token counts go to stderr. Any failure (refusal, truncated output, output that fails
+before anything is printed. Validated JSON goes to stdout; the model ID, model-call count,
+and input/output token counts go to stderr. Any failure (refusal, truncated output, output that fails
 validation, or an API error) prints a concise message to stderr and exits nonzero — an
 empty findings list is a successful result. **This makes a real, billable API request.**
-This is a single, standalone expert call — there is no orchestrator, no multi-expert
-pipeline, and no persistence yet.
+This is a single, standalone expert call; to run several perspectives, see the
+multi-expert runner below.
+
+**Bounded recovery (possible second billable request).** The API does not enforce the
+three-finding limit (the SDK passes it to the model only as a schema hint), so the model
+occasionally returns more. When — and only when — a normally completed response contains
+more than three findings that are *each* valid and the report has no other schema
+problem, the CLI makes **exactly one** extra request to the same model (60s timeout, at
+most 256 output tokens, no automatic retries). That request shows the model the candidates
+labelled by index and asks it to return up to three indices; the final report is then
+built in Python from the original findings, so their wording is never rewritten. Refusals,
+truncation, API errors, malformed JSON, or an invalid individual finding are not
+recovered. If the selection is invalid (duplicate, out-of-range, non-integer, or more than
+three indices) or the second request fails, the run fails — there is never a third call.
+stderr reports whether recovery was attempted, the number of model calls, and input/output
+tokens summed across both calls; if a call returned no usage (e.g. an API error), the
+totals are marked incomplete rather than counted as zero.
+
+#### Multi-expert runner
+
+```bash
+uv run python -m blindspot.pipeline \
+  --plan "I want to open a small coffee shop in Warsaw." \
+  --perspective "Financial" \
+  --perspective "Operations" \
+  --perspective "Human & Behavioral"
+```
+
+Runs the single-expert call above once per perspective, concurrently. You choose the
+perspectives (one to three; trimmed, blank or case-insensitive duplicates rejected before
+anything is sent). Each expert sees only the plan and its own perspective, never another
+expert's results, and there are no pipeline-level retries. stdout is one JSON object: an
+overall `status` (`success` if every expert succeeded, `partial` if some did, `failed` if
+none did — zero findings counts as success) and an `experts` list in input order, each
+with its perspective, status, elapsed seconds, and either the report and model ID or a
+sanitized error, plus that expert's usage (calls, whether recovery ran, tokens, and
+whether usage is incomplete). Findings are reported per expert as-is: not merged, ranked,
+or deduplicated. stderr gets a summary of calls, summed tokens (marked incomplete where a
+call returned no usage), and total elapsed time. Exit code is 0 only if every expert
+succeeded.
+
+**Billing:** each expert makes one request plus at most one recovery request, so **three
+perspectives can make up to six billable requests.**
 
 ## Development commands
 
@@ -93,8 +136,9 @@ src/blindspot/           # the blindspot package (src layout: importable only af
 src/blindspot/main.py    # FastAPI app (currently just GET /health)
 src/blindspot/config.py  # ANTHROPIC_API_KEY / ANTHROPIC_MODEL loading
 src/blindspot/schemas.py # Finding / ExpertReport Pydantic output schema
-src/blindspot/prompts.py # expert system prompt
-src/blindspot/expert.py  # single-expert async call + CLI
+src/blindspot/prompts.py # expert and finding-selection system prompts
+src/blindspot/expert.py  # single-expert async call (+ bounded selection recovery) + CLI
+src/blindspot/pipeline.py  # concurrent runner for 1–3 explicit perspectives + CLI
 src/blindspot/llm_smoke.py  # connection smoke-check CLI
 tests/                   # pytest suite
 docs/                    # design notes and the original project brief

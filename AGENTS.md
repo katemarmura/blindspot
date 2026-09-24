@@ -18,22 +18,28 @@ Full context, motivation, and design exploration live in
 [`docs/project-brief.md`](docs/project-brief.md). Treat that file as the source of truth
 for intent; treat this file as the quick orientation for how to work in the repo day to day.
 
-## Current scope: minimal server, a single-expert experiment, a minimal multi-expert runner, and a model-comparison CLI
+## Current scope: minimal server, a single-expert experiment, a multi-expert runner (manual or auto-selected team), and a model-comparison CLI
 
 **As of now, this repository contains a project scaffold, a bare FastAPI server, and one
 small domain contract with one real LLM call (plus at most one bounded recovery call)
-built on it, run either alone, concurrently for 1–3 caller-supplied perspectives, or
-across two named models for manual comparison.**
-There is still no LLM orchestrator, no `ExpertDefinition` abstraction, no dynamic team
-selection, no synthesis or cross-review, no pipeline state, and no persistence. Those are deliberately being designed before they are
-implemented (see the open questions in `docs/project-brief.md`).
+built on it. It runs alone, concurrently for 1–3 caller-supplied perspectives, for a
+1–3 expert team proposed by one team-selector call, or across two named models for manual
+comparison.**
+There is still no synthesis or cross-review, no adaptive rounds, no skills, tools,
+permissions or model routing, no shared investigation state, and no database. Those are
+deliberately being designed before they are implemented (see the open questions in
+`docs/project-brief.md`).
 
 What exists:
 - `src/blindspot/schemas.py` — `Finding` and `ExpertReport` (Pydantic, `extra="forbid"`,
-  nonblank strings, 0–3 findings). The **first** domain contract — intentionally small
-  (no IDs, scores, categories, evidence, or review state).
-- `src/blindspot/prompts.py` — `EXPERT_SYSTEM_PROMPT` (the expert) and
-  `SELECTION_SYSTEM_PROMPT` (the bounded recovery step below).
+  nonblank strings, 0–3 findings), plus the team contract: `ExpertDefinition`
+  (`perspective`, `objective`, 1–3 `questions`; all nonblank) and `TeamPlan` (1–3 experts,
+  perspectives unique after trimming and ignoring case). All reject unexpected fields.
+  Intentionally small: no IDs, scores, categories, evidence, review state, skills,
+  permissions, or model routing.
+- `src/blindspot/prompts.py` — `EXPERT_SYSTEM_PROMPT` (the expert; includes one paragraph on
+  using a supplied objective and questions), `SELECTION_SYSTEM_PROMPT` (the bounded recovery
+  step below), and `TEAM_SELECTOR_SYSTEM_PROMPT` (team selection).
 - `src/blindspot/expert.py` — `run_expert(plan, perspective)`, one async call to one
   model using structured output (`messages.create` with
   `output_config={"format": {"type": "json_schema", "schema": transform_schema(ExpertReport)}}`
@@ -79,6 +85,35 @@ What exists:
   experts × (1 call + ≤1 recovery) = **at most six billable requests**. CLI:
   `uv run python -m blindspot.pipeline --plan "..." --perspective "..." [--perspective ...]`
   (JSON to stdout, usage summary + elapsed time to stderr, exit 0 only if all succeed).
+- `src/blindspot/team.py` — `PERSPECTIVE_CATALOGUE` (11 broad names; selection options,
+  not agent classes; custom perspectives allowed) and `select_team(plan)`. It makes one
+  structured-output call to the configured model: 60s timeout, 1500 max output tokens,
+  `max_retries=0`, no repair. The catalogue goes in the user message, not the system prompt.
+  Output is validated locally against `TeamPlan`. An API error, refusal, truncation, missing
+  text, or invalid team raises `TeamSelectionError`, an `ExpertError` subclass with the same
+  usage, `returned_model`, and `FailureDiagnostics` (`failure_stage="team_selection"`,
+  `validation_errors` with `schema="team_plan"`). It reuses `expert.py`'s private
+  `_call`/`_check_stop_reason`/validation helpers.
+- `pipeline.run_auto_team(plan)` (CLI `--auto-team`, mutually exclusive with
+  `--perspective`):
+  - It validates the plan and config, creates `runs/team-<UTC>-<hex>/`, then calls
+    `select_team`.
+  - It writes `team.json` (plan, git state, selector settings, team or selection failure
+    with diagnostics and usage) **before any expert starts**. A failed selection starts no
+    experts.
+  - Otherwise `run_team` runs the team's experts concurrently with the same runner as
+    manual mode. Each expert gets the plan plus only its own perspective, objective, and
+    questions.
+  - It then writes `result.json`. CLI JSON adds `team`, `team_selection`, per-expert
+    `assignment`, and `total_usage` (selector plus experts; each expert's usage already
+    includes its recovery, so nothing is double-counted). The team is printed to stderr
+    before the experts run.
+  - **At most seven billable requests**: 1 selector + 3 × (1 + ≤1 recovery).
+- `run_expert(..., *, objective=None, questions=None)`: when given, these are appended to
+  the expert's input as labelled `Objective:` / `Investigation questions:` sections.
+  Omitted, the input is exactly `Plan:`/`Perspective:` as before (manual runs, compare).
+  The finding-selection recovery call receives that same input, assignment included, followed
+  by `Candidate findings:`, so selection judges candidates against the same objective.
 - `run_expert(..., *, model=None)`: an optional keyword-only override, used for both the
   initial and recovery calls. When given, `ANTHROPIC_MODEL` isn't needed. The override never
   mutates the environment. Omitted, the configured model is used as before.
@@ -99,13 +134,15 @@ What exists:
   - At most 2 requests per run: 4 for one repetition, 12 for three.
   - There is no quality scoring, no cost calculation, and no LLM judge. Small comparisons
     are exploratory, not a model ranking.
+- `src/blindspot/runs.py` — shared `runs/` helpers (`create_run_dir`, atomic `write_json`,
+  `utc_now`, `git_state`) used by `compare` and `--auto-team`.
 - `src/blindspot/llm_smoke.py` — the pre-existing connectivity-only diagnostic
   (`uv run python -m blindspot.llm_smoke`), unaffected by the above; still not part of
   the application.
 
-The runner is plain concurrent fan-out over perspectives the caller names. Do not read
-LLM orchestration, dynamic expert selection, synthesis, cross-review, or any of the
-`docs/project-brief.md` pipeline diagrams into it.
+The runner is plain concurrent fan-out: over perspectives the caller names, or over one
+team proposed by a single selector call. Do not read adaptive orchestration, synthesis,
+cross-review, or any of the `docs/project-brief.md` pipeline diagrams into it.
 
 Do not infer architecture from this file beyond what's stated. Any structure diagrams or
 role lists in `docs/project-brief.md` are explicitly **provisional** — starting points for
@@ -120,11 +157,11 @@ discussion, not specifications to implement as-is.
 - **Config:** `src/blindspot/config.py` — `get_anthropic_api_key()` and
   `get_anthropic_model()` lazily load `ANTHROPIC_API_KEY` / `ANTHROPIC_MODEL` from `.env`
   (via `python-dotenv`) or the shell environment, no hardcoded model fallback. Only
-  `llm_smoke.py`, `expert.py`, and `pipeline.py`/`compare.py` (up-front checks) call these; the FastAPI app doesn't, and doesn't need
+  `llm_smoke.py`, `expert.py`, `team.py`, and `pipeline.py`/`compare.py` (up-front checks) call these; the FastAPI app doesn't, and doesn't need
   either to run.
-- **Domain schema:** `src/blindspot/schemas.py` — `Finding` / `ExpertReport` (Pydantic).
-  The first and only domain contract so far; see the scope note above for what it
-  deliberately excludes.
+- **Domain schema:** `src/blindspot/schemas.py` — `Finding` / `ExpertReport` and
+  `ExpertDefinition` / `TeamPlan` (Pydantic); see the scope note above for what they
+  deliberately exclude.
 - **Expert call:** `src/blindspot/expert.py` (`uv run python -m blindspot.expert --plan
   ... --perspective ...`) — one async Anthropic structured-output call per invocation
   (`messages.create` + `output_config`, validated locally against `ExpertReport`), 60s
@@ -147,14 +184,17 @@ discussion, not specifications to implement as-is.
   uses `asyncio.Event`s (not timing thresholds) to prove overlap and completion order.
   `tests/test_compare.py` replaces `compare.run_expert` the same way and works in a
   `tmp_path` cwd, so `runs/` is created there. One end-to-end test goes through the real
-  `run_expert` with a fake Anthropic client.
+  `run_expert` with a fake Anthropic client. `tests/test_team.py` covers the team schema
+  and `select_team` against a fake client; `tests/test_auto_team.py` replaces
+  `pipeline.select_team` and `pipeline.run_expert`, plus one end-to-end test through both
+  with a fake client.
 - **Layout:** `src/` layout — the package is `src/blindspot/`, importable only once
   installed (via `uv sync`), which avoids accidentally importing from the working
   directory instead of the installed package.
 
-Likely future additions (not yet present, do not add speculatively): an orchestrator,
-`ExpertDefinition`, dynamic perspective selection, synthesis, cross-review, and persistent
-pipeline state. Do not introduce an agent framework, a database, Docker, or a frontend until the
+Likely future additions (not yet present, do not add speculatively): synthesis,
+cross-review, adaptive rounds, skills/tools/permissions, model routing, and shared
+investigation state. Do not introduce an agent framework, a database, Docker, or a frontend until the
 rest of the domain contracts and first pipeline are designed.
 
 ## Development commands

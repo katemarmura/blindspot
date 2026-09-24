@@ -3,8 +3,10 @@
 Run with:
     uv run python -m blindspot.expert --plan "..." --perspective "..."
 
-This is a standalone experiment, not orchestration — there is no
-ExpertDefinition abstraction, no multi-expert pipeline, and no persistence.
+`run_expert` is also what `blindspot.pipeline` runs per expert. It
+optionally takes an assigned objective and investigation questions (from an
+automatically selected team); without them it behaves as a plain
+plan/perspective call.
 
 One bounded recovery step exists: if the model returns more than three
 otherwise-valid findings, a single second call asks the same model to select
@@ -25,7 +27,7 @@ from pydantic import BaseModel, ConfigDict, Field, StrictInt, field_validator
 
 from blindspot.config import get_anthropic_api_key, get_anthropic_model
 from blindspot.prompts import EXPERT_SYSTEM_PROMPT, SELECTION_SYSTEM_PROMPT
-from blindspot.schemas import ExpertReport, Finding
+from blindspot.schemas import ExpertDefinition, ExpertReport, Finding, TeamPlan
 
 REQUEST_TIMEOUT_SECONDS = 60.0
 MAX_OUTPUT_TOKENS = 3000
@@ -100,7 +102,9 @@ class UsageSummary:
         self.output_tokens += response.usage.output_tokens
 
 
-FailureStage = Literal["initial", "selection"]
+# "initial"/"selection" are an expert's own calls (report, finding-selection
+# recovery); "team_selection" is the pipeline's team-selector call.
+FailureStage = Literal["initial", "selection", "team_selection"]
 
 # Why the bounded recovery was not attempted after an initial-stage failure.
 RecoverySkipReason = Literal[
@@ -112,7 +116,7 @@ RecoverySkipReason = Literal[
     "within_finding_limit",  # defensive: no count violation to recover from
 ]
 
-ValidationSchema = Literal["expert_report", "candidate_report", "selection"]
+ValidationSchema = Literal["expert_report", "candidate_report", "selection", "team_plan"]
 
 
 @dataclass(frozen=True)
@@ -177,7 +181,13 @@ class ExpertError(Exception):
 # Field names defined by our own schemas. Any other name in an error location
 # (e.g. an unexpected key the model emitted) is model-generated and replaced.
 _KNOWN_FIELDS = frozenset(
-    {*ExpertReport.model_fields, *Finding.model_fields, *_Selection.model_fields}
+    {
+        *ExpertReport.model_fields,
+        *Finding.model_fields,
+        *_Selection.model_fields,
+        *TeamPlan.model_fields,
+        *ExpertDefinition.model_fields,
+    }
 )
 _UNKNOWN_FIELD = "<unknown field>"
 
@@ -296,17 +306,18 @@ def _format_candidates(candidates: list[Finding]) -> str:
 async def _select_findings(
     client: anthropic.AsyncAnthropic,
     model: str,
-    plan: str,
-    perspective: str,
+    expert_input: str,
     candidates: list[Finding],
     usage: UsageSummary,
 ) -> ExpertReport:
-    """The one recovery call: ask the model to pick up to three candidates by index."""
+    """The one recovery call: ask the model to pick up to three candidates by index.
+
+    `expert_input` is the initial call's exact user content (plan, perspective,
+    and any assigned objective and questions), so selection judges candidates
+    against the same assignment the expert was given.
+    """
     usage.recovery_attempted = True
-    user_content = (
-        f"Plan:\n{plan}\n\nPerspective:\n{perspective}\n\n"
-        f"Candidate findings:\n{_format_candidates(candidates)}"
-    )
+    user_content = f"{expert_input}\n\nCandidate findings:\n{_format_candidates(candidates)}"
     response = await _call(
         client,
         usage,
@@ -383,8 +394,7 @@ def _recovery_skip_reason(
 async def _report_from_response(
     client: anthropic.AsyncAnthropic,
     model: str,
-    plan: str,
-    perspective: str,
+    expert_input: str,
     response: Message,
     usage: UsageSummary,
 ) -> ExpertReport:
@@ -419,7 +429,7 @@ async def _report_from_response(
 
     skip_reason = _recovery_skip_reason(response, candidates, candidate_error)
     if skip_reason is None and candidates is not None:
-        return await _select_findings(client, model, plan, perspective, candidates, usage)
+        return await _select_findings(client, model, expert_input, candidates, usage)
 
     issues = _validation_issues("expert_report", report_error)
     report_details = _describe_validation_error(report_error)
@@ -443,12 +453,35 @@ async def _report_from_response(
     ) from report_error
 
 
-async def run_expert(plan: str, perspective: str, *, model: str | None = None) -> ExpertRun:
+def _user_content(
+    plan: str, perspective: str, objective: str | None, questions: list[str] | None
+) -> str:
+    content = f"Plan:\n{plan}\n\nPerspective:\n{perspective}"
+    if objective is not None:
+        content += f"\n\nObjective:\n{objective}"
+    if questions is not None:
+        numbered = "\n".join(f"{i}. {q}" for i, q in enumerate(questions, start=1))
+        content += f"\n\nInvestigation questions:\n{numbered}"
+    return content
+
+
+async def run_expert(
+    plan: str,
+    perspective: str,
+    *,
+    model: str | None = None,
+    objective: str | None = None,
+    questions: list[str] | None = None,
+) -> ExpertRun:
     """Run one expert perspective over one plan and return a validated result.
 
     `model` overrides `ANTHROPIC_MODEL` for both the initial and any recovery
     call; when given, `ANTHROPIC_MODEL` need not be configured. Omitted, the
     configured model is used as before.
+
+    `objective` and `questions` (an assignment from a selected team) are added
+    to the expert's input as labelled sections when given. Omitted, the input
+    is exactly the plan and perspective, as for manual runs.
 
     An `ExpertReport` with zero findings is a successful result, not an
     error. If the model returns more than three findings that are otherwise
@@ -464,12 +497,16 @@ async def run_expert(plan: str, perspective: str, *, model: str | None = None) -
         raise ValueError("perspective must not be blank")
     if model is not None and not model.strip():
         raise ValueError("model must not be blank")
+    if objective is not None and not objective.strip():
+        raise ValueError("objective must not be blank")
+    if questions is not None and (not questions or any(not q.strip() for q in questions)):
+        raise ValueError("questions must be a non-empty list of nonblank strings")
 
     api_key = get_anthropic_api_key()
     model = model.strip() if model is not None else get_anthropic_model()
     usage = UsageSummary()
 
-    user_content = f"Plan:\n{plan}\n\nPerspective:\n{perspective}"
+    user_content = _user_content(plan, perspective, objective, questions)
 
     async with anthropic.AsyncAnthropic(
         api_key=api_key,
@@ -487,7 +524,7 @@ async def run_expert(plan: str, perspective: str, *, model: str | None = None) -
             stage="initial",
         )
         try:
-            report = await _report_from_response(client, model, plan, perspective, response, usage)
+            report = await _report_from_response(client, model, user_content, response, usage)
         except ExpertError as exc:
             # A response was received, so its model ID is known even though the
             # run failed (same source as `ExpertRun.model` on success).

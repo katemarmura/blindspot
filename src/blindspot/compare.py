@@ -12,16 +12,11 @@ There is no automatic quality judgement, cost calculation, or retry.
 
 import argparse
 import asyncio
-import json
-import os
 import re
-import secrets
-import subprocess
 import sys
 import time
 from collections.abc import Callable
 from dataclasses import dataclass
-from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Literal
 
@@ -39,8 +34,8 @@ from blindspot.expert import (
     run_expert,
 )
 from blindspot.prompts import EXPERT_SYSTEM_PROMPT, SELECTION_SYSTEM_PROMPT
+from blindspot.runs import create_run_dir, git_state, utc_now, write_json
 
-RUNS_DIR = Path("runs")
 MIN_REPEATS = 1
 MAX_REPEATS = 3
 
@@ -120,41 +115,10 @@ def run_order(config: ComparisonConfig) -> list[tuple[int, str]]:
     return order
 
 
-def _utc_now() -> str:
-    return datetime.now(UTC).isoformat(timespec="seconds")
-
-
-def _git(*args: str) -> str | None:
-    try:
-        result = subprocess.run(
-            ["git", *args], capture_output=True, text=True, check=True, timeout=10
-        )
-    except (OSError, subprocess.SubprocessError):
-        return None
-    return result.stdout
-
-
-def _git_state() -> dict[str, Any]:
-    revision = _git("rev-parse", "HEAD")
-    status = _git("status", "--porcelain") if revision is not None else None
-    return {
-        "revision": revision.strip() if revision is not None else None,
-        "dirty": bool(status.strip()) if status is not None else None,
-    }
-
-
-def _write_json(path: Path, data: dict[str, Any]) -> None:
-    # Write to a temporary file then rename, so an interruption never leaves
-    # a truncated result file behind.
-    tmp = path.with_suffix(".json.tmp")
-    tmp.write_text(json.dumps(data, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
-    os.replace(tmp, path)
-
-
 def _manifest(config: ComparisonConfig, comparison_id: str) -> dict[str, Any]:
     return {
         "comparison_id": comparison_id,
-        "created_at": _utc_now(),
+        "created_at": utc_now(),
         "plan": config.plan,
         "perspective": config.perspective,
         "models": list(config.models),
@@ -172,7 +136,7 @@ def _manifest(config: ComparisonConfig, comparison_id: str) -> dict[str, Any]:
             "sdk_max_retries": 0,
             "max_model_calls_per_run": 2,
         },
-        "git": _git_state(),
+        "git": git_state(),
     }
 
 
@@ -215,7 +179,7 @@ def _record_filename(record: RunRecord) -> str:
 async def _run_one(
     config: ComparisonConfig, repetition: int, execution_order: int, model: str
 ) -> RunRecord:
-    started_at = _utc_now()
+    started_at = utc_now()
     start = time.monotonic()
     try:
         run = await run_expert(config.plan, config.perspective, model=model)
@@ -243,13 +207,6 @@ async def _run_one(
     )
 
 
-def create_comparison_dir(runs_dir: Path = RUNS_DIR) -> tuple[str, Path]:
-    comparison_id = f"{datetime.now(UTC):%Y%m%dT%H%M%SZ}-{secrets.token_hex(3)}"
-    directory = runs_dir / comparison_id
-    directory.mkdir(parents=True, exist_ok=False)
-    return comparison_id, directory
-
-
 async def run_comparison(
     config: ComparisonConfig,
     directory: Path,
@@ -257,12 +214,12 @@ async def run_comparison(
     on_record: Callable[[RunRecord, int], None] | None = None,
 ) -> Comparison:
     """Run every (repetition, model) pair sequentially, saving each as it completes."""
-    _write_json(directory / "manifest.json", _manifest(config, comparison_id))
+    write_json(directory / "manifest.json", _manifest(config, comparison_id))
     order = run_order(config)
     records: list[RunRecord] = []
     for execution_order, (repetition, model) in enumerate(order, start=1):
         record = await _run_one(config, repetition, execution_order, model)
-        _write_json(directory / _record_filename(record), _record_json(record))
+        write_json(directory / _record_filename(record), _record_json(record))
         records.append(record)
         if on_record is not None:
             on_record(record, len(order))
@@ -336,7 +293,7 @@ async def _run(args: argparse.Namespace) -> int:
         print(f"Error: {exc}", file=sys.stderr)
         return 1
 
-    comparison_id, directory = create_comparison_dir()
+    comparison_id, directory = create_run_dir()
     try:
         comparison = await run_comparison(config, directory, comparison_id, on_record=_progress)
     except BaseException:

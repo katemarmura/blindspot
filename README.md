@@ -13,9 +13,9 @@ context and [`AGENTS.md`](AGENTS.md) for the current project scope.
 **Status:** minimal runnable FastAPI server with a health check, a first single-expert
 experiment (`blindspot.expert`) that makes one real, Pydantic-validated LLM call (plus at
 most one bounded recovery call — see below), and a minimal runner (`blindspot.pipeline`)
-that runs one to three explicitly named perspectives concurrently, plus a small
-model-comparison command (`blindspot.compare`). No LLM orchestration, synthesis,
-cross-review, or database yet.
+that runs one to three perspectives concurrently. You either name them yourself or let one
+team-selector call propose them (`--auto-team`). There's also a small model-comparison
+command (`blindspot.compare`). No synthesis, cross-review, or database yet.
 
 ## Requirements
 
@@ -123,6 +123,43 @@ succeeded.
 **Billing:** each expert makes one request plus at most one recovery request, so **three
 perspectives can make up to six billable requests.**
 
+##### Automatic team selection
+
+```bash
+uv run python -m blindspot.pipeline \
+  --plan "I want to open a small coffee shop in Warsaw." \
+  --auto-team
+```
+
+`--auto-team` replaces `--perspective`; you can't use both. First, one request asks the
+configured model to propose the smallest useful team of one to three experts. Each expert
+gets a perspective, an objective, and one to three neutral questions. Perspectives come from
+a built-in catalogue (Financial, Legal & Regulatory, Operations & Logistics, Timeline &
+Dependencies, Human & Behavioral, Health & Safety, Security & Privacy, Technical, Social &
+Relationships, Environmental, Travel & Mobility), or the model can make up a custom one. The
+team is validated locally: 60s timeout, 1500 output tokens, no retries, no repair. If
+selection fails (refusal, truncation, invalid team, API error), no expert runs and the
+failure is reported with diagnostics.
+
+Otherwise the team is printed to stderr and its experts run concurrently, as above. Each
+expert sees the plan and only its own perspective, objective, and questions. The objective
+and questions guide attention; they don't dictate conclusions. A successful selection
+doesn't guarantee successful experts, so the result can still be `partial` or `failed`.
+
+stdout JSON adds `team`, `team_selection` (status, model, error, diagnostics, usage), each
+expert's `assignment`, and `total_usage` covering the selector and all experts. stderr
+reports the selector's usage separately and includes it in the totals. Results are saved
+under `runs/team-<UTC timestamp>-<random suffix>/` (git-ignored):
+
+- `team.json`: the plan, git state, selector settings, and the selected team, or the
+  selection failure. It's written before any expert starts, so it survives an interruption.
+- `result.json`: the full final JSON.
+
+**These files contain your plan and the generated findings.**
+
+**Billing:** one selector request plus up to three experts with at most one recovery each:
+**at most seven billable requests**.
+
 #### Model comparison
 
 ```bash
@@ -193,11 +230,13 @@ All checks run in CI on every push and pull request — see
 src/blindspot/           # the blindspot package (src layout: importable only after install)
 src/blindspot/main.py    # FastAPI app (currently just GET /health)
 src/blindspot/config.py  # ANTHROPIC_API_KEY / ANTHROPIC_MODEL loading
-src/blindspot/schemas.py # Finding / ExpertReport Pydantic output schema
-src/blindspot/prompts.py # expert and finding-selection system prompts
+src/blindspot/schemas.py # Finding / ExpertReport, ExpertDefinition / TeamPlan (Pydantic)
+src/blindspot/prompts.py # expert, finding-selection, and team-selector system prompts
 src/blindspot/expert.py  # single-expert async call (+ bounded selection recovery) + CLI
-src/blindspot/pipeline.py  # concurrent runner for 1–3 explicit perspectives + CLI
+src/blindspot/pipeline.py  # concurrent runner: explicit perspectives or --auto-team + CLI
 src/blindspot/compare.py   # two-model comparison CLI (results saved under runs/)
+src/blindspot/team.py      # perspective catalogue + one-call team selector
+src/blindspot/runs.py      # shared helpers for saving results under runs/
 src/blindspot/llm_smoke.py  # connection smoke-check CLI
 tests/                   # pytest suite
 docs/                    # design notes and the original project brief

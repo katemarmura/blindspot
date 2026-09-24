@@ -859,3 +859,106 @@ def test_cli_success_prints_no_diagnostics(
     out = capsys.readouterr()
     assert json.loads(out.out) == {"findings": [_VALID_FINDING.model_dump()]}
     assert "Failure stage" not in out.err
+
+
+# --- Assigned objective and questions ---
+
+
+def test_manual_call_input_is_exactly_plan_and_perspective(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _setup_env(tmp_path, monkeypatch)
+    fake = _install_fake(monkeypatch, _message(_report_json([])))
+
+    _run()
+
+    assert fake.calls[0]["messages"][0]["content"] == (
+        f"Plan:\n{_PLAN}\n\nPerspective:\n{_PERSPECTIVE}"
+    )
+
+
+def test_assignment_is_added_as_labelled_sections(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _setup_env(tmp_path, monkeypatch)
+    fake = _install_fake(monkeypatch, _message(_report_json([])))
+
+    asyncio.run(
+        expert.run_expert(
+            _PLAN,
+            _PERSPECTIVE,
+            objective="How rent and staffing interact in the first year.",
+            questions=["What lease terms are in place?", "How is staffing funded?"],
+        )
+    )
+
+    assert fake.calls[0]["messages"][0]["content"] == (
+        f"Plan:\n{_PLAN}\n\nPerspective:\n{_PERSPECTIVE}\n\n"
+        "Objective:\nHow rent and staffing interact in the first year.\n\n"
+        "Investigation questions:\n1. What lease terms are in place?\n2. How is staffing funded?"
+    )
+    assert fake.calls[0]["system"] == EXPERT_SYSTEM_PROMPT
+
+
+@pytest.mark.parametrize(
+    ("kwargs", "match"),
+    [
+        pytest.param({"objective": " "}, "objective", id="blank-objective"),
+        pytest.param({"questions": []}, "questions", id="empty-questions"),
+        pytest.param({"questions": ["ok?", " "]}, "questions", id="blank-question"),
+    ],
+)
+def test_invalid_assignment_is_rejected_before_any_call(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, kwargs: dict[str, Any], match: str
+) -> None:
+    _setup_env(tmp_path, monkeypatch)
+    fake = _install_fake(monkeypatch)
+
+    with pytest.raises(ValueError, match=match):
+        asyncio.run(expert.run_expert(_PLAN, _PERSPECTIVE, **kwargs))
+    assert fake.calls == []
+
+
+def test_recovery_receives_the_same_assignment_as_the_initial_call(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Regression: the selection call used to receive only the plan and
+    # perspective, dropping the assigned objective and questions.
+    _setup_env(tmp_path, monkeypatch)
+    fake = _install_fake(
+        monkeypatch, _message(_report_json(_CANDIDATES)), _selection_message([2, 0])
+    )
+    objective = "How rent and staffing interact in the first year."
+    questions = ["What lease terms are in place?", "How is staffing funded?"]
+
+    run = asyncio.run(
+        expert.run_expert(_PLAN, _PERSPECTIVE, objective=objective, questions=questions)
+    )
+
+    assert len(fake.calls) == 2
+    initial, selection = (call["messages"][0]["content"] for call in fake.calls)
+    assert f"Objective:\n{objective}" in initial
+    assert selection.startswith(initial + "\n\nCandidate findings:\n")
+    assert f"Objective:\n{objective}" in selection
+    assert (
+        "Investigation questions:\n1. What lease terms are in place?\n2. How is staffing funded?"
+        in selection
+    )
+    assert fake.calls[1]["system"] == SELECTION_SYSTEM_PROMPT
+    assert run.report.findings == [_CANDIDATES[2], _CANDIDATES[0]]
+
+
+def test_manual_recovery_input_is_unchanged(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _setup_env(tmp_path, monkeypatch)
+    fake = _install_fake(monkeypatch, _message(_report_json(_CANDIDATES)), _selection_message([0]))
+
+    _run()
+
+    selection = fake.calls[1]["messages"][0]["content"]
+    assert selection.startswith(
+        f"Plan:\n{_PLAN}\n\nPerspective:\n{_PERSPECTIVE}\n\nCandidate findings:\n"
+    )
+    assert "Objective:" not in selection
+    assert "Investigation questions:" not in selection

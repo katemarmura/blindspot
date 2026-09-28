@@ -312,6 +312,7 @@ rest of the domain contracts and first pipeline are designed.
 ## Development commands
 
 ```bash
+make verify                                      # all CI checks, locked, no fixes (see Makefile)
 uv sync                                          # install/update the environment from uv.lock
 uv run uvicorn blindspot.main:app --reload       # run the dev server
 uv run pytest                                    # run tests
@@ -321,7 +322,16 @@ uv run mypy                                      # type-check
 ```
 
 CI (`.github/workflows/ci.yml`) runs `ruff check`, `ruff format --check`, `mypy`, and
-`pytest` on every push and pull request. Run the same commands locally before pushing.
+`pytest` on every push and pull request. Run `make verify` (the same four, via
+`uv run --locked`) before pushing, and keep the Makefile aligned with CI if CI changes.
+
+Project-level Claude Code skills live in `.claude/skills/`:
+- `review-change` reviews an implementation against its requested scope.
+- `inspect-run` does a read-only review of saved `runs/` artifacts: stage outcomes, usage,
+  tracing, and quality observations. It has a stdlib helper, `summarize_run.py`.
+
+These are development aids, not Blindspot runtime capabilities. If an artifact format
+changes, update `inspect-run`'s format table and helper.
 
 ## Conventions
 

@@ -316,6 +316,7 @@ content. A failed step prints a short call/response summary to stderr.
 
 | Command | Purpose |
 | --- | --- |
+| `make verify` | Run all local checks, the same as CI (see below) |
 | `uv run uvicorn blindspot.main:app --reload` | Run the dev server (http://127.0.0.1:8000) |
 | `uv run pytest` | Run the test suite |
 | `uv run ruff check .` | Lint |
@@ -329,6 +330,38 @@ Health check: `GET /health` → `200 {"status": "ok"}`.
 
 All checks run in CI on every push and pull request — see
 [`.github/workflows/ci.yml`](.github/workflows/ci.yml).
+
+### Verify before pushing
+
+```bash
+make verify
+```
+
+This runs the CI checks locally, in CI's order, through the uv-managed environment:
+`ruff check .`, `ruff format --check .`, `mypy`, and `pytest`, each via `uv run --locked`. It
+never formats, auto-fixes, or rewrites `uv.lock` (an out-of-date lockfile makes it fail).
+It makes no API calls. Every check runs even if an earlier one fails; failures are listed at
+the end, and the exit code is nonzero.
+
+### Inspecting saved runs (coding-agent skill)
+
+`.claude/skills/inspect-run/` is a project-level Claude Code skill for reviewing artifacts
+under `runs/`. It's for development, not part of Blindspot's runtime.
+
+- **Invoke it:** ask Claude Code to "inspect this run", "check the output", or "did
+  reassessment use my answers correctly?", or type `/inspect-run`.
+- **What it reports:** stage outcomes, and usage kept separate for the original run and each
+  clarification attempt. It then traces conclusions back to cited findings and recorded
+  responses, and labels observations as confirmed defects, hypotheses, or judgments.
+- **Read-only:** it never modifies artifacts, reads `.env`, or makes API calls.
+
+Its helper also works on its own for a quick structural summary (read-only, standard
+library only):
+
+```bash
+uv run --locked python .claude/skills/inspect-run/summarize_run.py --list
+uv run --locked python .claude/skills/inspect-run/summarize_run.py runs/<run-dir>
+```
 
 ## Project layout
 

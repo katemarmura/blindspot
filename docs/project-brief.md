@@ -1,3 +1,47 @@
+# Product direction update — 2026-09-24
+
+The intended user experience is a guided clarification process. An initial investigation
+identifies potential blind spots and missing information; the user answers manageable
+questions before receiving a short conclusion tailored to their circumstances. This
+addresses the reading and memory burden of presenting every expert question at once.
+
+Planned interaction:
+
+1. Investigate the original plan from independent perspectives and consolidate overlapping
+   concerns and questions.
+2. Present one focused question at a time, with its originating perspective(s) and a brief
+   explanation of why the answer matters. Offer suggested answers where useful and free text.
+3. Support answering now, explicitly marking a question not applicable, saying “I don't
+   know,” or saving it for later.
+4. Reassess using the original plan and accumulated answers after a small batch. Prefer
+   questions whose answers could materially change the conclusion; avoid asking every
+   generated question or repeating questions already answered.
+5. Return a concise account of remaining concerns, concerns addressed by the answers, and
+   unresolved uncertainties. Allow the user to finish early with the available information.
+
+Answers are user-reported context, not independently verified evidence. Apply each answer
+only to the concerns it actually addresses: vaccination information does not resolve
+introduction timing, and a carer's experience does not establish their availability.
+“I don't know” preserves uncertainty; deferral leaves a question open; “not applicable”
+records the user's assessment rather than silently proving every related concern resolved.
+Do not interpret missing information as an absent arrangement. Keep original findings and
+the relationship between questions, answers, and revised conclusions inspectable.
+
+This is agreed product direction, **not implemented behavior or a finalized architecture**.
+The current CLI runs team selection, parallel experts, and a single synthesis without user
+clarification. Keep it as a baseline while developing this flow incrementally. The next
+design step is a minimal question/answer state contract followed by one testable
+clarification round. Exact schemas, suggested-answer generation, batch size, stopping
+rules and call budgets, reassessment responsibilities, and persistence remain open. Do not
+assume every answer requires rerunning every expert. No UI, database, agent framework, or
+automatic multi-round orchestration is required by this direction update alone.
+
+The original brief below preserves the initial exploration. Its architecture diagrams,
+limits, and statements about implementation status are historical proposals; consult
+`AGENTS.md` for current implementation scope and this update for the clarification direction.
+
+# Original project brief
+
 I want to build a pet project called Blindspot.
 The primary purpose of the project is to learn and experiment with:
 - multi-agent systems;

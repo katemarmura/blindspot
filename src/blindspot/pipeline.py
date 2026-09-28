@@ -11,8 +11,12 @@ three expert assignments first; if it fails, no expert starts. Either way each
 expert runs the existing single-expert call (`run_expert`) independently and
 concurrently, seeing only the original plan and its own perspective (plus, for
 an auto-selected team, its own objective and questions). Outcomes are returned
-per expert, in input order — findings are never merged, ranked, or
-deduplicated, and there are no pipeline-level retries.
+per expert, in input order, and there are no pipeline-level retries.
+
+Only `--auto-team` adds a synthesis stage after the experts
+(`blindspot.synthesis`): one call that turns successful experts' findings
+into up to five cited considerations. The original expert reports are kept
+unchanged alongside it. Manual runs never synthesize.
 """
 
 import argparse
@@ -33,9 +37,18 @@ from blindspot.expert import (
     UsageSummary,
     run_expert,
 )
-from blindspot.prompts import TEAM_SELECTOR_SYSTEM_PROMPT
+from blindspot.prompts import SYNTHESIS_SYSTEM_PROMPT, TEAM_SELECTOR_SYSTEM_PROMPT
 from blindspot.runs import create_run_dir, git_state, utc_now, write_json
-from blindspot.schemas import ExpertDefinition, TeamPlan
+from blindspot.schemas import ExpertDefinition, SynthesisReport, TeamPlan
+from blindspot.synthesis import (
+    SYNTHESIS_MAX_OUTPUT_TOKENS,
+    ExpertInput,
+    SourceRef,
+    SynthesisError,
+    SynthesisRun,
+    source_map,
+    synthesize,
+)
 from blindspot.team import (
     PERSPECTIVE_CATALOGUE,
     TEAM_SELECTOR_MAX_OUTPUT_TOKENS,
@@ -195,15 +208,49 @@ async def run_team(plan: str, team: TeamPlan) -> PipelineResult:
     return await _run_experts(plan, [(e.perspective.strip(), e) for e in team.experts])
 
 
+# "completed": the synthesis call succeeded. "no_findings": experts succeeded but
+# reported nothing, so an empty report is returned without a call. "unavailable":
+# nothing to synthesize (team selection failed, or every expert failed).
+# "failed": the synthesis call failed; expert reports are still returned.
+SynthesisStatus = Literal["completed", "no_findings", "unavailable", "failed"]
+
+
+@dataclass(frozen=True)
+class SynthesisOutcome:
+    status: SynthesisStatus
+    reason: str | None = None
+    elapsed_seconds: float | None = None
+    run: SynthesisRun | None = None
+    error: SynthesisError | None = None
+
+    @property
+    def report(self) -> SynthesisReport | None:
+        if self.run is not None:
+            return self.run.report
+        return SynthesisReport(findings=[]) if self.status == "no_findings" else None
+
+    @property
+    def usage(self) -> UsageSummary | None:
+        if self.run is not None:
+            return self.run.usage
+        return self.error.usage if self.error is not None else None
+
+    @property
+    def succeeded(self) -> bool:
+        return self.status in ("completed", "no_findings")
+
+
 @dataclass(frozen=True)
 class AutoTeamRun:
-    """An `--auto-team` run: the selection (or its failure) and, if selected, the experts."""
+    """An `--auto-team` run: selection (or its failure), experts, and synthesis."""
 
     directory: Path
     elapsed_seconds: float
     selection: TeamSelection | None = None
     selection_error: TeamSelectionError | None = None
     result: PipelineResult | None = None
+    sources: dict[str, SourceRef] | None = None
+    synthesis: SynthesisOutcome | None = None
 
     @property
     def status(self) -> PipelineStatus:
@@ -215,6 +262,39 @@ class AutoTeamRun:
             return self.selection.usage
         return self.selection_error.usage if self.selection_error is not None else None
 
+    @property
+    def succeeded(self) -> bool:
+        """Every expert succeeded and synthesis produced a report (possibly empty)."""
+        return self.status == "success" and self.synthesis is not None and self.synthesis.succeeded
+
+
+async def _run_synthesis(plan: str, result: PipelineResult) -> SynthesisOutcome:
+    experts = [
+        ExpertInput(
+            position=position,
+            assignment=outcome.assignment,
+            report=outcome.run.report if outcome.run is not None else None,
+        )
+        for position, outcome in enumerate(result.outcomes, start=1)
+        if outcome.assignment is not None
+    ]
+    if all(e.report is None for e in experts):
+        return SynthesisOutcome(status="unavailable", reason="all experts failed")
+    if not source_map(experts):
+        return SynthesisOutcome(
+            status="no_findings",
+            reason="successful expert reports contained no findings",
+            elapsed_seconds=0.0,
+        )
+    start = time.monotonic()
+    try:
+        run = await synthesize(plan, experts)
+    except SynthesisError as exc:
+        return SynthesisOutcome(
+            status="failed", elapsed_seconds=time.monotonic() - start, error=exc
+        )
+    return SynthesisOutcome(status="completed", elapsed_seconds=time.monotonic() - start, run=run)
+
 
 async def run_auto_team(
     plan: str,
@@ -222,13 +302,14 @@ async def run_auto_team(
     on_directory: Callable[[Path], None] | None = None,
     on_team: Callable[[TeamSelection], None] | None = None,
 ) -> AutoTeamRun:
-    """Select a team with one call, save it, then run its experts concurrently.
+    """Select a team, run its experts concurrently, then synthesize their findings.
 
-    Configuration and the plan are validated first (`ValueError`). The team
-    (or the selection failure) is saved to `runs/<id>/team.json` before any
-    expert starts; the final result is saved to `result.json`. A failed
-    selection starts no experts. Unexpected exceptions propagate after the
-    already-saved files.
+    Configuration and the plan are validated first (`ValueError`). Files under
+    `runs/<id>/`: `team.json` (team or selection failure) before any expert
+    starts; `experts.json` (expert outcomes and the source-ID mapping) before
+    synthesis starts; `result.json` at the end. A failed selection starts no
+    experts; a failed synthesis keeps the expert reports. Unexpected exceptions
+    propagate after the already-saved files.
     """
     if not plan.strip():
         raise ValueError("plan must not be blank")
@@ -255,7 +336,10 @@ async def run_auto_team(
         selection = await select_team(plan)
     except TeamSelectionError as exc:
         failed = AutoTeamRun(
-            directory=directory, elapsed_seconds=time.monotonic() - start, selection_error=exc
+            directory=directory,
+            elapsed_seconds=time.monotonic() - start,
+            selection_error=exc,
+            synthesis=SynthesisOutcome(status="unavailable", reason="team selection failed"),
         )
         write_json(directory / "team.json", {**team_record, **_selection_json(failed)})
         return failed
@@ -266,11 +350,34 @@ async def run_auto_team(
         on_team(selection)
 
     result = await run_team(plan, selection.team)
+    sources = source_map(
+        [
+            ExpertInput(position, o.assignment, o.run.report if o.run is not None else None)
+            for position, o in enumerate(result.outcomes, start=1)
+            if o.assignment is not None
+        ]
+    )
+    expert_stage = AutoTeamRun(
+        directory=directory,
+        elapsed_seconds=time.monotonic() - start,
+        selection=selection,
+        result=result,
+        sources=sources,
+    )
+    # Saved before synthesis starts, so it survives a synthesis failure or interruption.
+    write_json(
+        directory / "experts.json",
+        {"run_id": run_id, "saved_at": utc_now(), "plan": plan, **auto_result_json(expert_stage)},
+    )
+
+    synthesis = await _run_synthesis(plan, result)
     auto = AutoTeamRun(
         directory=directory,
         elapsed_seconds=time.monotonic() - start,
         selection=selection,
         result=result,
+        sources=sources,
+        synthesis=synthesis,
     )
     write_json(
         directory / "result.json",
@@ -356,15 +463,54 @@ def _selection_json(auto: AutoTeamRun) -> dict[str, Any]:
     }
 
 
-def auto_result_json(auto: AutoTeamRun) -> dict[str, Any]:
-    outcomes = auto.result.outcomes if auto.result is not None else []
+def _synthesis_json(synthesis: SynthesisOutcome) -> dict[str, Any]:
+    error = synthesis.error
+    report = synthesis.report
     return {
+        "status": synthesis.status,
+        "reason": synthesis.reason,
+        "model": (
+            synthesis.run.model
+            if synthesis.run is not None
+            else (error.returned_model if error is not None else None)
+        ),
+        "elapsed_seconds": (
+            round(synthesis.elapsed_seconds, 3) if synthesis.elapsed_seconds is not None else None
+        ),
+        "report": report.model_dump() if report is not None else None,
+        "error": str(error) if error is not None else None,
+        "diagnostics": (
+            error.diagnostics.to_json()
+            if error is not None and error.diagnostics is not None
+            else None
+        ),
+        "usage": _usage_json(synthesis.usage),
+        "settings": {
+            "system_prompt": SYNTHESIS_SYSTEM_PROMPT,
+            "max_output_tokens": SYNTHESIS_MAX_OUTPUT_TOKENS,
+        },
+    }
+
+
+def auto_result_json(auto: AutoTeamRun) -> dict[str, Any]:
+    """The auto-team JSON. Omits `synthesis` until it has run (the expert-stage file)."""
+    outcomes = auto.result.outcomes if auto.result is not None else []
+    synthesis = auto.synthesis
+    stage_usage = [auto.selector_usage, *(o.usage for o in outcomes)]
+    if synthesis is not None:
+        stage_usage.append(synthesis.usage)
+    data: dict[str, Any] = {
         "status": auto.status,
         **_selection_json(auto),
         "experts": [_outcome_json(o) for o in outcomes],
-        # Selector plus experts (each expert's usage already includes its recovery).
-        "total_usage": _total_usage_json([auto.selector_usage, *(o.usage for o in outcomes)]),
     }
+    if auto.sources is not None:
+        data["sources"] = {sid: ref.to_json() for sid, ref in auto.sources.items()}
+    if synthesis is not None:
+        data["synthesis"] = _synthesis_json(synthesis)
+    # Selector + experts (each already including its recovery) + synthesis, each once.
+    data["total_usage"] = _total_usage_json(stage_usage)
+    return data
 
 
 def _incomplete_note(usages: list[UsageSummary]) -> str:
@@ -378,9 +524,11 @@ def _print_summary(
     status: PipelineStatus,
     elapsed_seconds: float,
     selector_usage: UsageSummary | None = None,
+    synthesis: SynthesisOutcome | None = None,
 ) -> None:
     expert_usages = [o.usage for o in outcomes if o.usage is not None]
-    usages = expert_usages + ([selector_usage] if selector_usage is not None else [])
+    synthesis_usage = synthesis.usage if synthesis is not None else None
+    usages = expert_usages + [u for u in (selector_usage, synthesis_usage) if u is not None]
     succeeded = sum(o.status == "success" for o in outcomes)
     model_calls = sum(u.model_calls for u in usages)
     recoveries = sum(u.recovery_attempted for u in expert_usages)
@@ -394,6 +542,19 @@ def _print_summary(
             f"output tokens {selector_usage.output_tokens}{_incomplete_note([selector_usage])}",
             file=sys.stderr,
         )
+    if synthesis is not None:
+        line = f"Synthesis: {synthesis.status}"
+        if synthesis.report is not None:
+            line += f" ({len(synthesis.report.findings)} findings)"
+        if synthesis_usage is not None:
+            line += (
+                f", input tokens {synthesis_usage.input_tokens}, "
+                f"output tokens {synthesis_usage.output_tokens}"
+                f"{_incomplete_note([synthesis_usage])}"
+            )
+        elif synthesis.reason is not None:
+            line += f" ({synthesis.reason})"
+        print(line, file=sys.stderr)
     print(f"Model calls: {model_calls} (recoveries: {recoveries})", file=sys.stderr)
     print(f"Input tokens: {sum(u.input_tokens for u in usages)}{note}", file=sys.stderr)
     print(f"Output tokens: {sum(u.output_tokens for u in usages)}{note}", file=sys.stderr)
@@ -456,10 +617,12 @@ async def _run_auto(plan: str) -> int:
     print(json.dumps(auto_result_json(auto), indent=2, ensure_ascii=False))
     if auto.selection_error is not None:
         print(f"Error: {auto.selection_error}", file=sys.stderr)
+    if auto.synthesis is not None and auto.synthesis.error is not None:
+        print(f"Error: {auto.synthesis.error}", file=sys.stderr)
     outcomes = auto.result.outcomes if auto.result is not None else []
-    _print_summary(outcomes, auto.status, auto.elapsed_seconds, auto.selector_usage)
+    _print_summary(outcomes, auto.status, auto.elapsed_seconds, auto.selector_usage, auto.synthesis)
     print(f"Results saved in: {auto.directory}", file=sys.stderr)
-    return 0 if auto.status == "success" else 1
+    return 0 if auto.succeeded else 1
 
 
 def main(argv: list[str] | None = None) -> int:

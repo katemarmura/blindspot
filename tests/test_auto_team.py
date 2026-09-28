@@ -14,9 +14,24 @@ from blindspot.expert import ExpertError, ExpertRun, FailureDiagnostics, UsageSu
 from blindspot.prompts import (
     EXPERT_SYSTEM_PROMPT,
     SELECTION_SYSTEM_PROMPT,
+    SYNTHESIS_SYSTEM_PROMPT,
     TEAM_SELECTOR_SYSTEM_PROMPT,
 )
-from blindspot.schemas import ExpertDefinition, ExpertReport, Finding, TeamPlan
+from blindspot.schemas import (
+    ExpertDefinition,
+    ExpertReport,
+    Finding,
+    SynthesisReport,
+    SynthesizedFinding,
+    TeamPlan,
+)
+from blindspot.synthesis import (
+    ExpertInput,
+    SynthesisError,
+    SynthesisRun,
+    source_map,
+    synthesize,
+)
 from blindspot.team import TeamSelection, TeamSelectionError
 
 _PLAN = "Open a coffee shop in Warsaw."
@@ -114,6 +129,23 @@ class _ExpertRecorder:
         return _run_for(perspective)
 
 
+def _synthesis_run(experts: list[ExpertInput]) -> SynthesisRun:
+    first_id = next(iter(source_map(experts)))
+    finding = SynthesizedFinding(
+        title="Synthesized",
+        observation="Observation.",
+        why_it_matters="Why.",
+        assumptions=[],
+        question_to_check="Question?",
+        source_finding_ids=[first_id],
+    )
+    return SynthesisRun(
+        report=SynthesisReport(findings=[finding]),
+        model=f"{_MODEL}-20260101",
+        usage=_usage(1, 300, 150),
+    )
+
+
 def _install(
     monkeypatch: pytest.MonkeyPatch,
     *,
@@ -128,9 +160,13 @@ def _install(
             raise outcome
         return outcome
 
+    async def fake_synthesize(plan: str, experts: list[ExpertInput]) -> SynthesisRun:
+        return _synthesis_run(experts)
+
     recorder = _ExpertRecorder(handler)
     monkeypatch.setattr(pipeline, "select_team", fake_select_team)
     monkeypatch.setattr(pipeline, "run_expert", recorder)
+    monkeypatch.setattr(pipeline, "synthesize", fake_synthesize)
     return recorder
 
 
@@ -339,12 +375,15 @@ def test_cli_auto_team_json_usage_and_saved_result(
     ]
     assert data["experts"][1]["assignment"] == _TEAM.experts[1].model_dump()
     assert data["experts"][1]["diagnostics"]["failure_stage"] == "selection"
-    # Selector (1 call, 400/200) + experts (2 + 2 + 1 calls; 200+100+100 / 100+50+50).
-    # Each expert's usage already includes its recovery, so nothing is counted twice.
+    assert data["synthesis"]["status"] == "completed"
+    assert data["synthesis"]["usage"]["input_tokens"] == 300
+    # Selector (1 call, 400/200) + experts (2 + 2 + 1 calls; 200+100+100 / 100+50+50)
+    # + synthesis (1 call, 300/150). Each expert's usage already includes its
+    # recovery, and synthesis is added once, so nothing is counted twice.
     assert data["total_usage"] == {
-        "model_calls": 6,
-        "input_tokens": 800,
-        "output_tokens": 400,
+        "model_calls": 7,
+        "input_tokens": 1100,
+        "output_tokens": 550,
         "usage_incomplete": True,
     }
 
@@ -353,8 +392,9 @@ def test_cli_auto_team_json_usage_and_saved_result(
     assert "- Financial: First-year cash flow against rent and fit-out costs." in out.err
     assert "    ? Which suppliers are arranged?" in out.err
     assert "Team selector: 1 call, input tokens 400, output tokens 200" in out.err
-    assert "Model calls: 6 (recoveries: 2)" in out.err
-    assert "Input tokens: 800 (incomplete: usage unavailable for 1 of 6 calls)" in out.err
+    assert "Synthesis: completed (1 findings), input tokens 300, output tokens 150" in out.err
+    assert "Model calls: 7 (recoveries: 2)" in out.err
+    assert "Input tokens: 1100 (incomplete: usage unavailable for 1 of 7 calls)" in out.err
 
     directory = _run_dir(tmp_path)
     saved = json.loads((directory / "result.json").read_text())
@@ -438,6 +478,16 @@ class _FakeMessages:
             text = self._team.model_dump_json()
         elif kwargs["system"] == SELECTION_SYSTEM_PROMPT:
             text = json.dumps({"selected_indices": [3, 1]})
+        elif kwargs["system"] == SYNTHESIS_SYSTEM_PROMPT:
+            finding = {
+                "title": "Synthesized",
+                "observation": "Observation.",
+                "why_it_matters": "Why.",
+                "assumptions": [],
+                "question_to_check": "Question?",
+                "source_finding_ids": ["e1-f1"],
+            }
+            text = json.dumps({"findings": [finding]})
         elif self._over_limit and f"Perspective:\n{self._over_limit}\n" in content:
             text = json.dumps({"findings": [_finding(f"c{i}").model_dump() for i in range(4)]})
         else:
@@ -477,6 +527,8 @@ def test_end_to_end_experts_see_only_their_own_assignment(
     selector_call, *expert_calls = messages.calls
     assert selector_call["system"] == TEAM_SELECTOR_SYSTEM_PROMPT
     assert selector_call["max_tokens"] == 1500
+    *expert_calls, synthesis_call = expert_calls
+    assert synthesis_call["system"] == SYNTHESIS_SYSTEM_PROMPT
     assert len(expert_calls) == 3
     contents = [c["messages"][0]["content"] for c in expert_calls]
     for expert in _TEAM.experts:
@@ -489,8 +541,8 @@ def test_end_to_end_experts_see_only_their_own_assignment(
                 assert other.perspective.strip() not in own
     assert all(c["system"] == EXPERT_SYSTEM_PROMPT for c in expert_calls)
     total = pipeline.auto_result_json(auto)["total_usage"]
-    assert total["model_calls"] == 4  # 1 selector + 3 experts, no recovery needed
-    assert total["input_tokens"] == 40
+    assert total["model_calls"] == 5  # 1 selector + 3 experts (no recovery) + 1 synthesis
+    assert total["input_tokens"] == 50  # 10 per call
 
 
 def test_end_to_end_recovery_keeps_the_experts_assignment(
@@ -525,4 +577,320 @@ def test_end_to_end_recovery_keeps_the_experts_assignment(
     recovered = auto.result.outcomes[1]
     assert recovered.run is not None and recovered.run.usage.recovery_attempted
     assert [f.title for f in recovered.run.report.findings] == ["c3 finding", "c1 finding"]
-    assert pipeline.auto_result_json(auto)["total_usage"]["model_calls"] == 5  # 1 + 3 + 1
+    # 1 selector + 3 experts + 1 recovery + 1 synthesis
+    assert pipeline.auto_result_json(auto)["total_usage"]["model_calls"] == 6
+
+
+# --- Synthesis stage ---
+
+SynthesisFake = Callable[[str, list[ExpertInput]], Awaitable[SynthesisRun]]
+
+
+def _install_synthesis(monkeypatch: pytest.MonkeyPatch, fake: SynthesisFake) -> list[Any]:
+    calls: list[Any] = []
+
+    async def recording(plan: str, experts: list[ExpertInput]) -> SynthesisRun:
+        calls.append((plan, experts))
+        return await fake(plan, experts)
+
+    monkeypatch.setattr(pipeline, "synthesize", recording)
+    return calls
+
+
+async def _never_called(plan: str, experts: list[ExpertInput]) -> SynthesisRun:
+    raise AssertionError("synthesis must not be called")
+
+
+def _synthesis_error() -> SynthesisError:
+    return SynthesisError(
+        "Synthesis cited 1 unknown source finding ID(s)",
+        _usage(1, 700, 350),
+        returned_model=f"{_MODEL}-20260101",
+        diagnostics=FailureDiagnostics(failure_stage="synthesis", stop_reason="end_turn"),
+    )
+
+
+def _cli_auto(capsys: pytest.CaptureFixture[str]) -> tuple[int, dict[str, Any], str]:
+    code = pipeline.main(["--plan", _PLAN, "--auto-team"])
+    out = capsys.readouterr()
+    return code, json.loads(out.out), out.err
+
+
+def test_synthesis_receives_successful_findings_and_missing_coverage(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _install(monkeypatch, handler=_mixed_handler())
+    calls = _install_synthesis(monkeypatch, lambda p, e: _async(_synthesis_run(e)))
+
+    _auto()
+
+    ((plan, experts),) = calls
+    assert plan == _PLAN
+    assert [(e.position, e.assignment, e.report is not None) for e in experts] == [
+        (1, _TEAM.experts[0], True),
+        (2, _TEAM.experts[1], False),  # failed: unavailable, no report
+        (3, _TEAM.experts[2], True),
+    ]
+
+
+def test_synthesis_input_marks_failed_perspective_without_error_text(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    marker = "SECRET-ERROR-MARKER"
+
+    async def handler(
+        plan: str, perspective: str, objective: str | None, questions: list[str] | None
+    ) -> ExpertRun:
+        if perspective == "Coffee Supply Chain":
+            raise ExpertError(f"Connection error: {marker}", _usage(1, 0, 0, calls_with_usage=0))
+        return _run_for(perspective)
+
+    _install(monkeypatch, handler=handler)
+    # Real synthesize with a fake SDK client (selector and experts stay mocked).
+    captured: list[str] = []
+
+    class _Messages:
+        async def create(self, **kwargs: Any) -> Message:
+            captured.append(kwargs["messages"][0]["content"])
+            text = json.dumps({"findings": []})
+            return Message(
+                id="m",
+                type="message",
+                role="assistant",
+                model=_MODEL,
+                content=[TextBlock(type="text", text=text)],
+                stop_reason="end_turn",
+                stop_sequence=None,
+                usage=Usage(input_tokens=1, output_tokens=1),
+            )
+
+    messages = _Messages()
+    monkeypatch.setattr(pipeline, "synthesize", synthesize)
+    monkeypatch.setattr(anthropic, "AsyncAnthropic", lambda **_: _FakeClient(messages))  # type: ignore[arg-type]
+
+    auto = _auto()
+
+    (content,) = captured
+    assert marker not in content
+    unavailable = json.loads(
+        content.split("missing coverage, not evidence that no concerns exist):\n")[1]
+    )
+    assert unavailable == [
+        {
+            "expert": "e2",
+            "perspective": "Coffee Supply Chain",
+            "objective": _TEAM.experts[1].objective,
+            "questions": _TEAM.experts[1].questions,
+            "status": "unavailable",
+        }
+    ]
+    assert '"id": "e1-f1"' in content and '"id": "e3-f1"' in content
+    assert auto.synthesis is not None and auto.synthesis.status == "completed"
+
+
+def test_partial_expert_failure_stays_visible_when_synthesis_succeeds(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    _install(monkeypatch, handler=_mixed_handler())
+
+    code, data, err = _cli_auto(capsys)
+
+    assert code == 1
+    assert data["status"] == "partial"
+    assert data["synthesis"]["status"] == "completed"
+    assert [e["status"] for e in data["experts"]] == ["success", "failed", "success"]
+    assert data["experts"][1]["error"] == "Connection error: boom"
+    assert "Status: partial (2/3 experts succeeded)" in err
+
+
+def test_full_success_with_synthesis_exits_zero(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    _install(monkeypatch)
+
+    code, data, _ = _cli_auto(capsys)
+
+    assert code == 0
+    assert data["status"] == "success"
+    synthesis_json = data["synthesis"]
+    assert synthesis_json["status"] == "completed"
+    assert synthesis_json["reason"] is None
+    assert synthesis_json["model"] == f"{_MODEL}-20260101"
+    assert synthesis_json["error"] is None and synthesis_json["diagnostics"] is None
+    assert synthesis_json["elapsed_seconds"] >= 0
+    assert synthesis_json["report"]["findings"][0]["source_finding_ids"] == ["e1-f1"]
+    # Every cited ID resolves, through the saved mapping, to an unchanged original finding.
+    for source_id, ref in data["sources"].items():
+        original = data["experts"][ref["expert_position"] - 1]["report"]["findings"]
+        assert original[ref["finding_position"] - 1]["title"] == ref["title"]
+        assert source_id == f"e{ref['expert_position']}-f{ref['finding_position']}"
+    assert list(data["sources"]) == ["e1-f1", "e2-f1", "e3-f1"]
+    # Selector 1 + experts 3 + synthesis 1, each counted once.
+    assert data["total_usage"] == {
+        "model_calls": 5,
+        "input_tokens": 400 + 300 + 300,
+        "output_tokens": 200 + 150 + 150,
+        "usage_incomplete": False,
+    }
+
+
+def test_empty_successful_reports_skip_the_synthesis_call(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    async def handler(
+        plan: str, perspective: str, objective: str | None, questions: list[str] | None
+    ) -> ExpertRun:
+        return ExpertRun(report=ExpertReport(findings=[]), model=_MODEL, usage=_usage(1, 100, 10))
+
+    _install(monkeypatch, handler=handler)
+    calls = _install_synthesis(monkeypatch, _never_called)
+
+    code, data, err = _cli_auto(capsys)
+
+    assert calls == []
+    assert code == 0
+    assert data["synthesis"]["status"] == "no_findings"
+    assert data["synthesis"]["report"] == {"findings": []}
+    assert data["synthesis"]["usage"] is None
+    assert data["sources"] == {}
+    assert data["total_usage"]["model_calls"] == 4
+    assert "Synthesis: no_findings (0 findings)" in err
+
+
+def test_all_expert_failure_skips_synthesis(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    async def handler(
+        plan: str, perspective: str, objective: str | None, questions: list[str] | None
+    ) -> ExpertRun:
+        raise ExpertError("Connection error: boom", _usage(1, 0, 0, calls_with_usage=0))
+
+    _install(monkeypatch, handler=handler)
+    calls = _install_synthesis(monkeypatch, _never_called)
+
+    code, data, err = _cli_auto(capsys)
+
+    assert calls == []
+    assert code == 1
+    assert data["status"] == "failed"
+    assert data["synthesis"]["status"] == "unavailable"
+    assert data["synthesis"]["reason"] == "all experts failed"
+    assert data["synthesis"]["report"] is None
+    assert "Synthesis: unavailable (all experts failed)" in err
+
+
+def test_selection_failure_reports_synthesis_unavailable(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    _install(monkeypatch, selection=_selection_error())
+    calls = _install_synthesis(monkeypatch, _never_called)
+
+    code, data, _ = _cli_auto(capsys)
+
+    assert calls == []
+    assert code == 1
+    assert data["synthesis"]["status"] == "unavailable"
+    assert data["synthesis"]["reason"] == "team selection failed"
+
+
+def test_synthesis_failure_keeps_expert_reports_and_exits_nonzero(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    _install(monkeypatch)
+
+    async def failing(plan: str, experts: list[ExpertInput]) -> SynthesisRun:
+        raise _synthesis_error()
+
+    _install_synthesis(monkeypatch, failing)
+
+    code, data, err = _cli_auto(capsys)
+
+    assert code == 1
+    assert data["status"] == "success"  # experts all succeeded
+    assert data["synthesis"]["status"] == "failed"
+    assert data["synthesis"]["report"] is None
+    assert data["synthesis"]["model"] == f"{_MODEL}-20260101"
+    assert data["synthesis"]["error"] == "Synthesis cited 1 unknown source finding ID(s)"
+    assert data["synthesis"]["diagnostics"]["failure_stage"] == "synthesis"
+    assert [e["report"]["findings"][0]["title"] for e in data["experts"]] == [
+        "Financial finding",
+        "Coffee Supply Chain finding",
+        "Legal & Regulatory finding",
+    ]
+    assert data["total_usage"]["input_tokens"] == 400 + 300 + 700
+    assert "Error: Synthesis cited 1 unknown source finding ID(s)" in err
+    saved = json.loads((_run_dir(tmp_path) / "result.json").read_text())
+    assert saved["synthesis"]["status"] == "failed"
+    assert saved["experts"] == data["experts"]
+
+
+def test_expert_stage_is_saved_before_synthesis_starts(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _install(monkeypatch, handler=_mixed_handler())
+    seen: list[dict[str, Any]] = []
+
+    async def checking(plan: str, experts: list[ExpertInput]) -> SynthesisRun:
+        directory = _run_dir(tmp_path)
+        assert (directory / "team.json").exists()
+        assert not (directory / "result.json").exists()
+        seen.append(json.loads((directory / "experts.json").read_text()))
+        return _synthesis_run(experts)
+
+    _install_synthesis(monkeypatch, checking)
+
+    _auto()
+
+    (stage,) = seen
+    assert stage["plan"] == _PLAN
+    assert "synthesis" not in stage
+    assert [e["status"] for e in stage["experts"]] == ["success", "failed", "success"]
+    assert stage["sources"] == {
+        "e1-f1": {
+            "expert_position": 1,
+            "perspective": "Financial",
+            "finding_position": 1,
+            "title": "Financial finding",
+        },
+        "e3-f1": {
+            "expert_position": 3,
+            "perspective": "Legal & Regulatory",
+            "finding_position": 1,
+            "title": "Legal & Regulatory finding",
+        },
+    }
+
+
+def test_expert_stage_survives_interrupted_synthesis(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _install(monkeypatch)
+
+    async def interrupted(plan: str, experts: list[ExpertInput]) -> SynthesisRun:
+        raise asyncio.CancelledError
+
+    _install_synthesis(monkeypatch, interrupted)
+
+    with pytest.raises(asyncio.CancelledError):
+        pipeline.main(["--plan", _PLAN, "--auto-team"])
+
+    directory = _run_dir(tmp_path)
+    stage = json.loads((directory / "experts.json").read_text())
+    assert len(stage["experts"]) == 3
+    assert not (directory / "result.json").exists()
+
+
+def test_manual_mode_never_synthesizes(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    _install(monkeypatch)
+    calls = _install_synthesis(monkeypatch, _never_called)
+
+    assert pipeline.main(["--plan", _PLAN, "--perspective", "Financial"]) == 0
+
+    assert calls == []
+    assert "synthesis" not in json.loads(capsys.readouterr().out)
+
+
+async def _async(value: SynthesisRun) -> SynthesisRun:
+    return value

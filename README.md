@@ -14,8 +14,15 @@ context and [`AGENTS.md`](AGENTS.md) for the current project scope.
 experiment (`blindspot.expert`) that makes one real, Pydantic-validated LLM call (plus at
 most one bounded recovery call — see below), and a minimal runner (`blindspot.pipeline`)
 that runs one to three perspectives concurrently. You either name them yourself or let one
-team-selector call propose them (`--auto-team`). There's also a small model-comparison
-command (`blindspot.compare`). No synthesis, cross-review, or database yet.
+team-selector call propose them (`--auto-team`, which also synthesizes the results).
+There's also a small model-comparison command (`blindspot.compare`) and one manual
+clarification round over a saved auto-team run (`blindspot.clarification`). No cross-review,
+UI, or database yet.
+
+**Planned experience:** guided clarification, with one question at a time and a short
+conclusion informed by the user's answers. This is not implemented in the current CLI.
+See the [product direction update](docs/project-brief.md#product-direction-update--2026-09-24)
+for the intended flow and open design questions.
 
 ## Requirements
 
@@ -153,12 +160,41 @@ under `runs/team-<UTC timestamp>-<random suffix>/` (git-ignored):
 
 - `team.json`: the plan, git state, selector settings, and the selected team, or the
   selection failure. It's written before any expert starts, so it survives an interruption.
-- `result.json`: the full final JSON.
+- `experts.json`: the expert results and the source-ID mapping. It's written before
+  synthesis starts, so it survives a synthesis failure or interruption.
+- `result.json`: the full final JSON, including synthesis.
 
 **These files contain your plan and the generated findings.**
 
-**Billing:** one selector request plus up to three experts with at most one recovery each:
-**at most seven billable requests**.
+**Synthesis.** After the experts finish, one more request turns the successful experts'
+findings into at most five distinct considerations (60s timeout, 3000 output tokens, no
+retries or repair).
+
+- Each supplied finding gets a stable ID, `e<team position>-f<finding position>`, for
+  example `e1-f2`. Each synthesized finding must cite at least one.
+- IDs are checked in Python: citing an unknown ID makes synthesis fail. `sources` in the
+  JSON maps each ID back to its expert and finding, and the original expert reports are
+  kept unchanged next to the synthesis.
+- **A valid ID shows which findings were cited, not that the rewritten text faithfully
+  represents them.** Check synthesized findings against their sources yourself.
+- Failed experts appear in the synthesis input only as `unavailable` perspectives (missing
+  coverage), never with their error text.
+
+`synthesis.status` is separate from the top-level expert status:
+
+- `completed`: the call succeeded.
+- `no_findings`: experts succeeded but found nothing, so an empty report is returned
+  without a call.
+- `unavailable`: team selection failed, or every expert failed.
+- `failed`: the call failed; expert reports are still returned, along with the model,
+  usage, and diagnostics.
+
+A partial expert failure stays visible in `status` and `experts` even when synthesis
+succeeds. The exit code is 0 only if every expert succeeded and synthesis is `completed` or
+`no_findings`.
+
+**Billing:** one selector request, up to three experts with at most one recovery each, and
+one synthesis request: **at most eight billable requests**.
 
 #### Model comparison
 
@@ -206,6 +242,76 @@ twelve**.
 A comparison this small is exploratory. It can show differences worth a closer look, but it
 isn't evidence of a definitive ranking between models.
 
+#### Clarification round (one batch, manual)
+
+After an `--auto-team` run, you can answer a few questions and get a reassessment. There are
+two explicit steps, each making **at most one billable request** with no retries:
+
+```bash
+# 1. Generate up to three questions from a saved run
+uv run python -m blindspot.clarification prepare --run runs/team-<id>
+
+# 2. Edit runs/team-<id>/clarify-<id>/responses.json, then:
+uv run python -m blindspot.clarification reassess \
+  --clarification runs/team-<id>/clarify-<id>/clarification.json \
+  --responses runs/team-<id>/clarify-<id>/responses.json
+```
+
+`prepare`:
+
+- It reads the run's `result.json` and asks the model for up to three questions whose
+  answers could materially change the analysis. It can also decide no questions would help.
+- It uses the plan, the successful experts' findings, failed perspectives (as missing
+  coverage), and the synthesis if there is one.
+- Each question cites the finding IDs it bears on (for example `e1-f2`), and its
+  perspectives are shown next to it.
+- If the run has no successful findings, it stops without a call.
+- It writes a new `clarify-<UTC>-<id>/` folder inside the run folder, containing
+  `clarification.json` (the context, questions, and call details) and a `responses.json`
+  template. The run's own files aren't touched.
+
+In `responses.json`, set each question's `status` to one of:
+
+- `answered`, with `answer` text;
+- `dont_know`;
+- `not_applicable`, with an optional explanation in `answer`;
+- `deferred`.
+
+Leave `status` as `null` (or delete the entry) to skip a question.
+
+`reassess`:
+
+- It validates both files. Unknown question IDs, duplicate responses, and a status that
+  doesn't fit the answer text are rejected before any call.
+- If every question is unanswered or deferred, there's nothing new to reassess, so it makes
+  no call.
+- Otherwise it sends the original plan, findings, questions, and your exact responses in
+  one request. It prints up to five remaining considerations, the concerns your answers
+  address, and the unresolved uncertainties, each citing finding and question IDs (checked
+  in Python).
+- The result is saved as a new `reassessment-<UTC>-<id>.json` next to `clarification.json`.
+  Your response file is not modified.
+
+Your answers are treated as reported context, not verified facts. "I don't know" and
+deferral leave uncertainty open rather than proving a risk, and "not applicable" records
+your assessment without automatically resolving related concerns. Each step reports only
+its own token usage. **These files contain your plan, the findings, and your answers.**
+
+Each saved question or reassessment step also records `call_diagnostics`, whether it
+succeeded or failed:
+
+- the requested model and output-token limit, and the elapsed time;
+- whether a response arrived, and if so its model, stop reason, and content-block types
+  and counts;
+- the total characters across text blocks;
+- whether the text used for parsing was valid JSON syntax (`null` if there was no text).
+  This is separate from schema validation: a truncated response can be valid JSON and still
+  count as a failure.
+
+If no response arrived, those response fields are `null` rather than looking like an
+empty response. Only counts and types are saved, never the returned text or thinking
+content. A failed step prints a short call/response summary to stderr.
+
 ## Development commands
 
 | Command | Purpose |
@@ -230,13 +336,15 @@ All checks run in CI on every push and pull request — see
 src/blindspot/           # the blindspot package (src layout: importable only after install)
 src/blindspot/main.py    # FastAPI app (currently just GET /health)
 src/blindspot/config.py  # ANTHROPIC_API_KEY / ANTHROPIC_MODEL loading
-src/blindspot/schemas.py # Finding / ExpertReport, ExpertDefinition / TeamPlan (Pydantic)
-src/blindspot/prompts.py # expert, finding-selection, and team-selector system prompts
+src/blindspot/schemas.py # Finding / ExpertReport, ExpertDefinition / TeamPlan, Synthesis* (Pydantic)
+src/blindspot/prompts.py # expert, finding-selection, team-selector, synthesis, clarification prompts
 src/blindspot/expert.py  # single-expert async call (+ bounded selection recovery) + CLI
 src/blindspot/pipeline.py  # concurrent runner: explicit perspectives or --auto-team + CLI
 src/blindspot/compare.py   # two-model comparison CLI (results saved under runs/)
 src/blindspot/team.py      # perspective catalogue + one-call team selector
+src/blindspot/synthesis.py # source IDs + one-call synthesis (auto-team only)
 src/blindspot/runs.py      # shared helpers for saving results under runs/
+src/blindspot/clarification.py  # one clarification round: prepare questions, reassess
 src/blindspot/llm_smoke.py  # connection smoke-check CLI
 tests/                   # pytest suite
 docs/                    # design notes and the original project brief

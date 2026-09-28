@@ -27,7 +27,20 @@ from pydantic import BaseModel, ConfigDict, Field, StrictInt, field_validator
 
 from blindspot.config import get_anthropic_api_key, get_anthropic_model
 from blindspot.prompts import EXPERT_SYSTEM_PROMPT, SELECTION_SYSTEM_PROMPT
-from blindspot.schemas import ExpertDefinition, ExpertReport, Finding, TeamPlan
+from blindspot.schemas import (
+    AddressedConcern,
+    ExpertDefinition,
+    ExpertReport,
+    Finding,
+    ProposedQuestion,
+    QuestionBatch,
+    ReassessmentReport,
+    RemainingConsideration,
+    SynthesisReport,
+    SynthesizedFinding,
+    TeamPlan,
+    UnresolvedUncertainty,
+)
 
 REQUEST_TIMEOUT_SECONDS = 60.0
 MAX_OUTPUT_TOKENS = 3000
@@ -103,8 +116,16 @@ class UsageSummary:
 
 
 # "initial"/"selection" are an expert's own calls (report, finding-selection
-# recovery); "team_selection" is the pipeline's team-selector call.
-FailureStage = Literal["initial", "selection", "team_selection"]
+# recovery); "team_selection" and "synthesis" are the auto-team pipeline's calls;
+# "clarification_questions" and "reassessment" are the clarification round's.
+FailureStage = Literal[
+    "initial",
+    "selection",
+    "team_selection",
+    "synthesis",
+    "clarification_questions",
+    "reassessment",
+]
 
 # Why the bounded recovery was not attempted after an initial-stage failure.
 RecoverySkipReason = Literal[
@@ -116,7 +137,15 @@ RecoverySkipReason = Literal[
     "within_finding_limit",  # defensive: no count violation to recover from
 ]
 
-ValidationSchema = Literal["expert_report", "candidate_report", "selection", "team_plan"]
+ValidationSchema = Literal[
+    "expert_report",
+    "candidate_report",
+    "selection",
+    "team_plan",
+    "synthesis_report",
+    "question_batch",
+    "reassessment_report",
+]
 
 
 @dataclass(frozen=True)
@@ -187,6 +216,14 @@ _KNOWN_FIELDS = frozenset(
         *_Selection.model_fields,
         *TeamPlan.model_fields,
         *ExpertDefinition.model_fields,
+        *SynthesisReport.model_fields,
+        *SynthesizedFinding.model_fields,
+        *QuestionBatch.model_fields,
+        *ProposedQuestion.model_fields,
+        *ReassessmentReport.model_fields,
+        *RemainingConsideration.model_fields,
+        *AddressedConcern.model_fields,
+        *UnresolvedUncertainty.model_fields,
     }
 )
 _UNKNOWN_FIELD = "<unknown field>"

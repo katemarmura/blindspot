@@ -48,6 +48,7 @@ Artifact formats:
 | | `result.json` | Final: `experts`, `sources`, `synthesis`, `total_usage`. |
 | Clarification | `runs/team-*/clarify-*/clarification.json` | Plan, experts, `sources`, `synthesis`, `questions`, `question_generation`. |
 | | `responses.json` | The user-edited responses (may change after a reassessment). |
+| Evaluation copy | `runs/evals/clarify-*/` | A copy of a committed fixture from `evals/`: `clarification.json` with no question-generation call, several `responses-*.json`, and the reassessments made from them. Use that fixture's `CHECKLIST.md`. |
 | | `reassessment-*.json` | `recorded_responses` actually used, `unanswered_question_ids`, `report`, `diagnostics`, `usage`, `settings.max_output_tokens`, and `call_diagnostics` (newer files). |
 
 Older artifacts lack later fields. Examples:
@@ -56,6 +57,9 @@ Older artifacts lack later fields. Examples:
 - files without `call_diagnostics` or `diagnostics`.
 
 Report such fields as unavailable, not as failures or zeros.
+
+When reviewing an evaluation copy, go through its `CHECKLIST.md` item by item, marking each
+Pass, Fail, or Unclear with a short quote. Record the prompt revision (`settings.git`).
 
 ## 3. Account for what happened
 

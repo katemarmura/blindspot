@@ -1,0 +1,21 @@
+{
+  "clarification_id": "eval-kitten-before-holiday",
+  "instructions": "Fictional evaluation answers. See CHECKLIST.md.",
+  "responses": [
+    {
+      "question_id": "q1",
+      "status": "answered",
+      "answer": "The kitten is 1.5 months old. It has a microchip and its first vaccination; more vaccines are due at 2.5 months."
+    },
+    {
+      "question_id": "q2",
+      "status": "answered",
+      "answer": "I don't know yet."
+    },
+    {
+      "question_id": "q3",
+      "status": "answered",
+      "answer": "Only the vet's contact details."
+    }
+  ]
+}

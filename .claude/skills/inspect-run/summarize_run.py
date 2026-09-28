@@ -198,12 +198,16 @@ def summarize_clarification(directory: Path) -> None:
         print("    clarification.json: missing or unreadable")
         return
     generation = artifact.get("question_generation") or {}
-    print(
-        f"    question generation: {artifact.get('status')} model={generation.get('model')} "
-        f"{_secs(generation.get('elapsed_seconds'))} {_usage(generation.get('usage'))}"
-        f"{_diag(generation.get('diagnostics'))}"
-    )
-    print(f"      {_call_diag(generation.get('call_diagnostics'))}")
+    generation_called = "usage" in generation or "model" in generation
+    if generation_called:
+        print(
+            f"    question generation: {artifact.get('status')} model={generation.get('model')} "
+            f"{_secs(generation.get('elapsed_seconds'))} {_usage(generation.get('usage'))}"
+            f"{_diag(generation.get('diagnostics'))}"
+        )
+        print(f"      {_call_diag(generation.get('call_diagnostics'))}")
+    else:
+        print("    question generation: no call recorded (e.g. a hand-written fixture)")
     known_sources = _derived_sources(
         [{"report": e.get("report")} for e in artifact.get("experts") or []]
     )
@@ -217,18 +221,20 @@ def summarize_clarification(directory: Path) -> None:
     if len(set(question_ids)) != len(question_ids):
         print(f"    DUPLICATE question IDs: {question_ids}")
 
-    responses_file = _load(directory / "responses.json")
-    current: list[tuple[Any, Any, Any]] | None = None
-    if isinstance(responses_file, dict):
-        entries = responses_file.get("responses") or []
-        current = _normalized(entries)
-        answered = {qid: status for qid, status, _ in current}
+    current: dict[str, list[tuple[Any, Any, Any]]] = {}
+    for responses_path in sorted(directory.glob("responses*.json")):
+        responses_file = _load(responses_path)
+        if not isinstance(responses_file, dict) or "__unreadable__" in responses_file:
+            print(f"    {responses_path.name}: unreadable")
+            continue
+        current[responses_path.name] = _normalized(responses_file.get("responses") or [])
+        answered = {qid: status for qid, status, _ in current[responses_path.name]}
         statuses = {qid: answered.get(qid, "unanswered") for qid in question_ids}
-        print(f"    responses.json (current): {statuses}")
-    else:
-        print("    responses.json: missing or unreadable")
+        print(f"    {responses_path.name} (current): {statuses}")
+    if not current:
+        print("    responses*.json: none found")
 
-    clarification_usages = [generation.get("usage")]
+    clarification_usages = [generation.get("usage")] if generation_called else []
     for path in sorted(directory.glob("reassessment-*.json")):
         clarification_usages.append(
             summarize_reassessment(path, question_ids, known_sources, current)
@@ -251,7 +257,7 @@ def summarize_reassessment(
     path: Path,
     question_ids: list[Any],
     known_sources: set[str],
-    current: list[tuple[Any, Any, Any]] | None,
+    current: dict[str, list[tuple[Any, Any, Any]]],
 ) -> Any:
     data = _load(path) or {}
     settings = data.get("settings") or {}
@@ -263,9 +269,13 @@ def summarize_reassessment(
     print(f"      {_call_diag(data.get('call_diagnostics'))}")
     recorded = _normalized(data.get("recorded_responses") or [])
     statuses = {qid: status for qid, status, _ in recorded}
-    print(f"      used responses: {statuses}, unanswered: {data.get('unanswered_question_ids')}")
-    if current is not None and current != recorded:
-        print("      NOTE: responses.json has changed since this reassessment was made")
+    responses_name = Path(str(data.get("responses_file") or "responses.json")).name
+    print(
+        f"      used responses ({responses_name}): {statuses}, "
+        f"unanswered: {data.get('unanswered_question_ids')}"
+    )
+    if responses_name in current and current[responses_name] != recorded:
+        print(f"      NOTE: {responses_name} has changed since this reassessment was made")
     report = data.get("report")
     if not isinstance(report, dict):
         return data.get("usage")
@@ -328,6 +338,10 @@ def main(argv: list[str] | None = None) -> int:
     if path.is_file():  # accept any artifact file: summarize its run (or clarify) directory
         path = path.parent
     if path.name.startswith("clarify-"):
+        if not path.parent.name.startswith("team-"):
+            # A standalone clarification (e.g. a copied evaluation fixture).
+            summarize_clarification(path)
+            return 0
         path = path.parent
     if path.name.startswith("team-"):
         summarize_team(path)

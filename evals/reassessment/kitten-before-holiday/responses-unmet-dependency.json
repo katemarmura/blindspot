@@ -1,0 +1,21 @@
+{
+  "clarification_id": "eval-kitten-before-holiday",
+  "instructions": "Fictional evaluation answers. See CHECKLIST.md.",
+  "responses": [
+    {
+      "question_id": "q1",
+      "status": "answered",
+      "answer": "The kitten is 1.5 months old. It has a microchip and its first vaccination; more vaccines are due at 2.5 months."
+    },
+    {
+      "question_id": "q2",
+      "status": "answered",
+      "answer": "The bathroom can be closed off. If the cats aren't comfortable together, the kitten stays there with its own food, water, litter box, and bed, and the adult cat keeps the rest of the apartment."
+    },
+    {
+      "question_id": "q3",
+      "status": "answered",
+      "answer": "My friend has the vet's contact details, a written list of signs to watch for, and my written permission to take either cat to the vet. But my friend is away for three of the ten days, and I haven't found anyone to visit on those days."
+    }
+  ]
+}

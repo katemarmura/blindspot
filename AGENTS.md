@@ -224,6 +224,26 @@ What exists:
     - It saves a new `reassessment-<UTC>-<hex>.json` next to the artifact, with the
       recorded responses, report or failure, model, usage, and diagnostics. The artifact
       and the response file are never modified.
+  - The reassessment prompt updates the supplied concerns; it is not a fresh search. Its
+    sections have distinct roles:
+    - remaining considerations are open original concerns;
+    - addressed concerns say what specifically improved (a learned fact is not enough);
+    - unresolved uncertainties are a specific missing fact plus the decision it would change.
+
+    Its stopping rules:
+    - accept a concrete reported arrangement for the gap it covers;
+    - don't replace addressed concerns with doubts about quality or the people involved;
+    - missing detail alone doesn't keep a concern open;
+    - report problems an answer reveals;
+    - a source ID doesn't justify a stricter concern;
+    - empty sections are valid.
+
+    It also requires titles that keep their item's uncertainty and no point repeated across
+    sections, and it forbids inferring unstated dates, timing, or layout and hardening
+    conditional findings.
+
+    The rules stay general, with no domain-specific wording. Judge prompt changes with the
+    manual fixture in `evals/reassessment/` (its `CHECKLIST.md`), not with mocked tests.
   - Diagnostics use the `clarification_questions` and `reassessment` stages (errors are
     `ClarificationError`); invalid input files raise `ClarificationInputError`.
   - Call diagnostics (`CallDiagnostics`) are saved as `call_diagnostics`, on success and on
@@ -300,6 +320,8 @@ discussion, not specifications to implement as-is.
   own fake on top. `tests/test_clarification.py` writes a saved run into `tmp_path` and
   covers the contracts, loading, both subcommands, the no-call cases, reference checks, and
   that original files are unchanged (by hashing them before and after).
+  `tests/test_reassessment_eval_fixture.py` only checks that the committed `evals/` fixture
+  stays loadable through `load_artifact`/`load_responses`. It is not a quality test.
 - **Layout:** `src/` layout — the package is `src/blindspot/`, importable only once
   installed (via `uv sync`), which avoids accidentally importing from the working
   directory instead of the installed package.

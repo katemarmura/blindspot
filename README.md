@@ -292,6 +292,27 @@ Leave `status` as `null` (or delete the entry) to skip a question.
 - The result is saved as a new `reassessment-<UTC>-<id>.json` next to `clarification.json`.
   Your response file is not modified.
 
+Reassessment updates the original concerns rather than searching for new ones. Each
+section has one job:
+
+- **Remaining considerations:** original concerns that are still open, stated as
+  consequences or decisions.
+- **Addressed concerns:** what an answer specifically improved. Learning a fact isn't enough.
+- **Unresolved uncertainties:** a specific missing fact, and the decision it would change.
+
+The prompt tells the model:
+
+- to accept a concrete arrangement you report as answering the gap it covers, rather than
+  replacing it with new doubts about its quality or the people involved;
+- that missing detail alone isn't a reason to keep a concern open;
+- to still report a real problem your answer reveals;
+- to stop once the concerns are covered, so empty sections are valid (which doesn't mean the
+  plan is guaranteed safe);
+- to mention each point once, with titles that don't claim timing the body treats as unknown;
+- not to infer dates, timing, or a place's layout that you didn't state;
+- not to harden a conditional finding into a categorical claim;
+- to read an `answered` response by what it says ("I don't know yet" is still uncertain).
+
 Your answers are treated as reported context, not verified facts. "I don't know" and
 deferral leave uncertainty open rather than proving a risk, and "not applicable" records
 your assessment without automatically resolving related concerns. Each step reports only
@@ -342,6 +363,17 @@ This runs the CI checks locally, in CI's order, through the uv-managed environme
 never formats, auto-fixes, or rewrites `uv.lock` (an out-of-date lockfile makes it fail).
 It makes no API calls. Every check runs even if an earlier one fails; failures are listed at
 the end, and the exit code is nonzero.
+
+### Reassessment quality check (manual, live)
+
+`evals/reassessment/kitten-before-holiday/` is a small **fictional** fixture: a clarification
+artifact, four answer sets, and a `CHECKLIST.md` of six cases. The answer sets are: vague
+baseline answers, answers with concrete arrangements, answers that reveal an unmet
+dependency, and sufficient answers that may give an empty report. Each case lists acceptable
+behaviour and examples of moving the goalposts. It's for judging live
+reassessment output by hand after prompt changes. The checklist explains how to copy it
+into `runs/evals/` and run it (one billable request per answer set). Automated tests only
+check that the fixture stays loadable; they don't and can't judge output quality.
 
 ### Inspecting saved runs (coding-agent skill)
 

@@ -351,9 +351,14 @@ Project-level Claude Code skills live in `.claude/skills/`:
 - `review-change` reviews an implementation against its requested scope.
 - `inspect-run` does a read-only review of saved `runs/` artifacts: stage outcomes, usage,
   tracing, and quality observations. It has a stdlib helper, `summarize_run.py`.
+- `compare-reassessments` compares two saved reassessments. It establishes what changed
+  (recorded answers, exact prompt text, model, limits, git), classifies the pair, then
+  judges improvements, regressions, and persistent issues by meaning and cited IDs. Its
+  helper, `compare_reassessments.py`, reuses `summarize_run.py`'s parsing and is tested in
+  `tests/test_compare_reassessments_helper.py`.
 
 These are development aids, not Blindspot runtime capabilities. If an artifact format
-changes, update `inspect-run`'s format table and helper.
+changes, update `inspect-run`'s format table and both helpers.
 
 ## Conventions
 

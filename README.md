@@ -395,6 +395,35 @@ uv run --locked python .claude/skills/inspect-run/summarize_run.py --list
 uv run --locked python .claude/skills/inspect-run/summarize_run.py runs/<run-dir>
 ```
 
+### Comparing reassessments (coding-agent skill)
+
+`.claude/skills/compare-reassessments/` compares two saved reassessments. It's also a
+development aid: read-only, no API calls, and no numeric score.
+
+- **Invoke it:** ask Claude Code to "compare the last two reassessments" or "did the prompt
+  change help?", or type `/compare-reassessments [A.json B.json]`.
+- **Choosing the pair:** with no paths, it takes the latest two in the relevant
+  clarification batch and names them.
+- **Establishing what changed:** before judging quality, it works out what differed between
+  the two runs' inputs:
+  - the answers each run actually used;
+  - the exact saved prompt text;
+  - the model, token limit, and git state.
+
+  It then classifies the pair as a prompt change, an answer change, run-to-run variation,
+  or multiple changes.
+- **Judging the output:** it matches concerns by meaning and cited finding IDs and reports
+  improvements, regressions, and persistent issues, each labelled verified, judgment, or
+  hypothesis.
+
+Its helper can also run on its own:
+
+```bash
+uv run --locked python .claude/skills/compare-reassessments/compare_reassessments.py \
+  runs/<...>/reassessment-A.json runs/<...>/reassessment-B.json
+uv run --locked python .claude/skills/compare-reassessments/compare_reassessments.py --batch runs/team-<id>/clarify-<id>
+```
+
 ## Project layout
 
 ```text

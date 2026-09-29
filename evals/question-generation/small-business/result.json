@@ -1,0 +1,140 @@
+{
+  "run_id": "eval-small-business",
+  "fixture_note": "FICTIONAL evaluation fixture for question generation; written by hand, no model calls.",
+  "plan": "FICTIONAL EVALUATION FIXTURE. I'm opening a small bakery in a rented storefront in three months. I'm funding it from my savings and will hire two part-time staff.",
+  "status": "partial",
+  "team": {
+    "experts": [
+      {
+        "perspective": "Financial",
+        "objective": "Whether the funding covers setup and the early months of trading.",
+        "questions": [
+          "What matters most for financial?"
+        ]
+      },
+      {
+        "perspective": "Legal & Regulatory",
+        "objective": "Licences and regulations for opening a food business.",
+        "questions": [
+          "What matters most for legal & regulatory?"
+        ]
+      },
+      {
+        "perspective": "Operations & Logistics",
+        "objective": "Whether staffing and premises support the planned opening.",
+        "questions": [
+          "What matters most for operations & logistics?"
+        ]
+      }
+    ]
+  },
+  "experts": [
+    {
+      "perspective": "Financial",
+      "status": "success",
+      "report": {
+        "findings": [
+          {
+            "title": "Savings runway before revenue is steady",
+            "observation": "Depending on the savings available and monthly fixed costs, there may be little buffer if early sales are slow.",
+            "why_it_matters": "Running out of cash in the first months could force the bakery to close.",
+            "assumptions": [
+              "Early revenue will not cover fixed costs straight away"
+            ],
+            "question_to_check": "(see the clarification step)"
+          },
+          {
+            "title": "Equipment costs may exceed the setup budget",
+            "observation": "If the storefront needs commercial ovens or refrigeration that are not already installed, setup costs could be higher than expected.",
+            "why_it_matters": "A larger setup spend reduces the cash buffer for trading.",
+            "assumptions": [
+              "The storefront is not already equipped as a bakery"
+            ],
+            "question_to_check": "(see the clarification step)"
+          }
+        ]
+      },
+      "error": null,
+      "assignment": {
+        "perspective": "Financial",
+        "objective": "Whether the funding covers setup and the early months of trading.",
+        "questions": [
+          "What matters most for financial?"
+        ]
+      }
+    },
+    {
+      "perspective": "Legal & Regulatory",
+      "status": "failed",
+      "report": null,
+      "error": "Fictional failure: this perspective is unavailable.",
+      "assignment": {
+        "perspective": "Legal & Regulatory",
+        "objective": "Licences and regulations for opening a food business.",
+        "questions": [
+          "What matters most for legal & regulatory?"
+        ]
+      }
+    },
+    {
+      "perspective": "Operations & Logistics",
+      "status": "success",
+      "report": {
+        "findings": [
+          {
+            "title": "Two part-time staff may not cover opening hours",
+            "observation": "Depending on the planned opening hours, two part-time staff plus the owner may leave some shifts short.",
+            "why_it_matters": "Short-staffed shifts could limit opening hours or lead to burnout.",
+            "assumptions": [
+              "The bakery will open most days of the week"
+            ],
+            "question_to_check": "(see the clarification step)"
+          },
+          {
+            "title": "Lease terms may limit fit-out work",
+            "observation": "If the lease restricts alterations, installing baking equipment or ventilation may need landlord approval.",
+            "why_it_matters": "Approval delays could push back the opening date.",
+            "assumptions": [
+              "The fit-out needs structural or ventilation changes"
+            ],
+            "question_to_check": "(see the clarification step)"
+          }
+        ]
+      },
+      "error": null,
+      "assignment": {
+        "perspective": "Operations & Logistics",
+        "objective": "Whether staffing and premises support the planned opening.",
+        "questions": [
+          "What matters most for operations & logistics?"
+        ]
+      }
+    }
+  ],
+  "sources": {
+    "e1-f1": {
+      "expert_position": 1,
+      "perspective": "Financial",
+      "finding_position": 1,
+      "title": "Savings runway before revenue is steady"
+    },
+    "e1-f2": {
+      "expert_position": 1,
+      "perspective": "Financial",
+      "finding_position": 2,
+      "title": "Equipment costs may exceed the setup budget"
+    },
+    "e3-f1": {
+      "expert_position": 3,
+      "perspective": "Operations & Logistics",
+      "finding_position": 1,
+      "title": "Two part-time staff may not cover opening hours"
+    },
+    "e3-f2": {
+      "expert_position": 3,
+      "perspective": "Operations & Logistics",
+      "finding_position": 2,
+      "title": "Lease terms may limit fit-out work"
+    }
+  }
+}

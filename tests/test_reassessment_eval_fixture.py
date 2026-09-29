@@ -37,6 +37,7 @@ RESPONSE_SETS = [
     "responses-arrangements.json",
     "responses-unmet-dependency.json",
     "responses-sufficient.json",
+    "responses-three-uncovered-days.json",
 ]
 
 
@@ -87,3 +88,8 @@ def test_answer_sets_differ_only_where_the_checklist_expects() -> None:
     assert baseline["q2"] != arrangements["q2"]
     assert baseline["q3"] != arrangements["q3"]
     assert all(sufficient[q] != arrangements[q] for q in ("q1", "q2", "q3"))
+    # Case 7 is the sufficient set with only q3 changed (three uncovered days).
+    uncovered = _answers("responses-three-uncovered-days.json")
+    assert uncovered["q1"] == sufficient["q1"]
+    assert uncovered["q2"] == sufficient["q2"]
+    assert uncovered["q3"] != sufficient["q3"]

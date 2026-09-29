@@ -261,6 +261,10 @@ uv run python -m blindspot.clarification reassess \
 
 - It reads the run's `result.json` and asks the model for up to three questions whose
   answers could materially change the analysis. It can also decide no questions would help.
+- Each question asks for one thing you can answer on its own: a fact, a decision, or a
+  single arrangement. Separate topics aren't bundled to fit the three-question limit; the
+  lower-priority ones are left out. A question cites several findings only when one answer
+  bears on all of them, and the "why it matters" line carries no hidden extra requests.
 - It uses the plan, the successful experts' findings, failed perspectives (as missing
   coverage), and the synthesis if there is one.
 - Each question cites the finding IDs it bears on (for example `e1-f2`), and its
@@ -308,6 +312,9 @@ The prompt tells the model:
 - to still report a real problem your answer reveals;
 - to stop once the concerns are covered, so empty sections are valid (which doesn't mean the
   plan is guaranteed safe);
+- to keep each action, instruction, permission, and availability with the person you gave
+  it to, keep durations as stated (for the trip, not permanent), and describe arrangements
+  as reported mitigations rather than guarantees;
 - to mention each point once, with titles that don't claim timing the body treats as unknown;
 - not to infer dates, timing, or a place's layout that you didn't state;
 - not to harden a conditional finding into a categorical claim;
@@ -364,12 +371,24 @@ never formats, auto-fixes, or rewrites `uv.lock` (an out-of-date lockfile makes 
 It makes no API calls. Every check runs even if an earlier one fails; failures are listed at
 the end, and the exit code is nonzero.
 
+### Question-generation quality check (manual, live)
+
+`evals/question-generation/` holds three small **fictional** fixtures: a pet before travel,
+a small business, and a software delivery. Each is a hand-written auto-team `result.json`
+with a `CHECKLIST.md`. They exercise the real `prepare` path without earlier live runs. The
+folder's `README.md` has the shared checks (one independently answerable topic per question,
+no hidden requests, no repetition, sensible priority, justified consolidation, valid
+references, neutral wording) and explains how to copy a fixture into `runs/evals/` before
+running it (one billable request per fixture). Automated tests only check that the fixtures
+load and that `prepare` runs on a copy; they don't judge question quality.
+
 ### Reassessment quality check (manual, live)
 
 `evals/reassessment/kitten-before-holiday/` is a small **fictional** fixture: a clarification
-artifact, four answer sets, and a `CHECKLIST.md` of six cases. The answer sets are: vague
+artifact, five answer sets, and a `CHECKLIST.md` of seven cases. The answer sets are: vague
 baseline answers, answers with concrete arrangements, answers that reveal an unmet
-dependency, and sufficient answers that may give an empty report. Each case lists acceptable
+dependency, sufficient answers that may give an empty report, and a three-uncovered-days
+variant for checking that actors, authority, and durations are preserved. Each case lists acceptable
 behaviour and examples of moving the goalposts. It's for judging live
 reassessment output by hand after prompt changes. The checklist explains how to copy it
 into `runs/evals/` and run it (one billable request per answer set). Automated tests only

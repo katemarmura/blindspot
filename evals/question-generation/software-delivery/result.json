@@ -1,0 +1,158 @@
+{
+  "run_id": "eval-software-delivery",
+  "fixture_note": "FICTIONAL evaluation fixture for question generation; written by hand, no model calls.",
+  "plan": "FICTIONAL EVALUATION FIXTURE. My team of four developers will deliver a customer portal for a client in eight weeks, using our existing authentication service. The client will provide the final design by the end of week two.",
+  "status": "success",
+  "team": {
+    "experts": [
+      {
+        "perspective": "Technical",
+        "objective": "Technical risks of building the portal on the existing authentication service.",
+        "questions": [
+          "What matters most for technical?"
+        ]
+      },
+      {
+        "perspective": "Timeline & Dependencies",
+        "objective": "Whether the eight-week schedule holds given its dependencies.",
+        "questions": [
+          "What matters most for timeline & dependencies?"
+        ]
+      },
+      {
+        "perspective": "Security & Privacy",
+        "objective": "Data-protection considerations for a customer-facing portal.",
+        "questions": [
+          "What matters most for security & privacy?"
+        ]
+      }
+    ]
+  },
+  "experts": [
+    {
+      "perspective": "Technical",
+      "status": "success",
+      "report": {
+        "findings": [
+          {
+            "title": "Client users may not exist in the authentication service",
+            "observation": "Depending on whether the client's users are already in the existing authentication service, a migration or new sign-up flow may be needed.",
+            "why_it_matters": "Unplanned migration work could consume a large part of the eight weeks.",
+            "assumptions": [
+              "The client's users are not yet in the authentication service"
+            ],
+            "question_to_check": "(see the clarification step)"
+          },
+          {
+            "title": "Acceptance criteria are not described",
+            "observation": "The plan does not say how the client will decide that the portal is complete.",
+            "why_it_matters": "Unclear acceptance can lead to late rework or disputes about scope.",
+            "assumptions": [
+              "Acceptance criteria have not been agreed"
+            ],
+            "question_to_check": "(see the clarification step)"
+          }
+        ]
+      },
+      "error": null,
+      "assignment": {
+        "perspective": "Technical",
+        "objective": "Technical risks of building the portal on the existing authentication service.",
+        "questions": [
+          "What matters most for technical?"
+        ]
+      }
+    },
+    {
+      "perspective": "Timeline & Dependencies",
+      "status": "success",
+      "report": {
+        "findings": [
+          {
+            "title": "A late design compresses build time",
+            "observation": "If the design arrives after week two, the remaining time for building and testing shrinks.",
+            "why_it_matters": "A compressed build raises the chance of missing the deadline or cutting testing.",
+            "assumptions": [
+              "The build cannot start meaningfully without the final design"
+            ],
+            "question_to_check": "(see the clarification step)"
+          },
+          {
+            "title": "Team availability across the eight weeks",
+            "observation": "Depending on whether the four developers also work on other projects, the effective capacity may be lower than four full-time people.",
+            "why_it_matters": "Lower capacity makes the eight-week deadline harder to meet.",
+            "assumptions": [
+              "Some developers have other commitments"
+            ],
+            "question_to_check": "(see the clarification step)"
+          }
+        ]
+      },
+      "error": null,
+      "assignment": {
+        "perspective": "Timeline & Dependencies",
+        "objective": "Whether the eight-week schedule holds given its dependencies.",
+        "questions": [
+          "What matters most for timeline & dependencies?"
+        ]
+      }
+    },
+    {
+      "perspective": "Security & Privacy",
+      "status": "success",
+      "report": {
+        "findings": [
+          {
+            "title": "Personal data handling requirements",
+            "observation": "If the portal stores or displays customers' personal data, the client may have security or compliance requirements the plan does not mention.",
+            "why_it_matters": "Late-discovered requirements could add significant work.",
+            "assumptions": [
+              "The portal will handle personal data"
+            ],
+            "question_to_check": "(see the clarification step)"
+          }
+        ]
+      },
+      "error": null,
+      "assignment": {
+        "perspective": "Security & Privacy",
+        "objective": "Data-protection considerations for a customer-facing portal.",
+        "questions": [
+          "What matters most for security & privacy?"
+        ]
+      }
+    }
+  ],
+  "sources": {
+    "e1-f1": {
+      "expert_position": 1,
+      "perspective": "Technical",
+      "finding_position": 1,
+      "title": "Client users may not exist in the authentication service"
+    },
+    "e1-f2": {
+      "expert_position": 1,
+      "perspective": "Technical",
+      "finding_position": 2,
+      "title": "Acceptance criteria are not described"
+    },
+    "e2-f1": {
+      "expert_position": 2,
+      "perspective": "Timeline & Dependencies",
+      "finding_position": 1,
+      "title": "A late design compresses build time"
+    },
+    "e2-f2": {
+      "expert_position": 2,
+      "perspective": "Timeline & Dependencies",
+      "finding_position": 2,
+      "title": "Team availability across the eight weeks"
+    },
+    "e3-f1": {
+      "expert_position": 3,
+      "perspective": "Security & Privacy",
+      "finding_position": 1,
+      "title": "Personal data handling requirements"
+    }
+  }
+}

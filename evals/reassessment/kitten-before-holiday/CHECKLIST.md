@@ -30,6 +30,7 @@ Answer sets, from least to most complete:
 | `responses-arrangements.json` | 2, 3, 4 | The same age answer, a closable bathroom with the kitten's own resources, and a warning-sign list with written authority to get treatment. |
 | `responses-unmet-dependency.json` | 5 | Like the arrangements set, but the friend is away for three of the ten days and nobody covers them. |
 | `responses-sufficient.json` | 6 | Concrete arrangements for every gap: the kitten's age at adoption, an automatic second meal, the next vaccination booked for after the return, separation for the whole trip, a pet camera, and a neighbour with a key. |
+| `responses-three-uncovered-days.json` | 5, 7 | Like the sufficient set, but q3 says the friend **and** the neighbour are both unavailable on the same three days, with no one else arranged. The user checks the camera twice a day. On the other seven days the friend visits and the neighbour, who has a key, can respond within an hour. |
 
 ## Running a live check
 
@@ -74,6 +75,10 @@ pass isn't proof.
       model's own inferences are conditional.
 - [ ] **No new investigation.** Nothing appears that none of the six findings raised, and no
       new numbers or advice.
+- [ ] **Actors and scope are preserved.** Each action, instruction, permission, and
+      availability stays with the person the answer gives it to. Durations and conditions are
+      kept, and arrangements are described as reported mitigations, not guarantees (see
+      case 7).
 
 ## Case 1: baseline answers leave meaningful gaps open (`responses-baseline.json`)
 
@@ -168,3 +173,55 @@ pass isn't proof.
 - Keeping the vaccination-timing uncertainty when the answer states it's booked for after
   the return.
 - Filling the sections to their limits.
+
+## Case 7: actors, authority, and duration are preserved (`responses-three-uncovered-days.json`)
+
+This case also exercises case 5: the answers reveal a concrete gap, and it must stay open.
+
+**Acceptable:**
+- **The three uncovered days stay the central open concern.** On those days neither the
+  friend nor the neighbour is available, and no one else is arranged. This appears in
+  `remaining_considerations` (and at most once more as a specific missing fact), not buried.
+- **The friend's role is correct.** The friend receives the vet's contact details, the
+  written list of signs, and the written permission to seek and approve treatment.
+- **The camera belongs to the user.** The user checks the camera twice a day. The friend and
+  the neighbour don't.
+- **The neighbour's role is limited to what was stated.** The neighbour has a key and can
+  respond within an hour on the seven covered days. Nothing more is assumed: no written
+  instructions, no treatment authority, no vet contact.
+- **Separation is for the trip.** The report says for the whole trip, or during the trip,
+  and doesn't make it permanent or unconditional.
+- **Arrangements are mitigations.** They're acknowledged as reported mitigations of specific
+  gaps (for example "the user reports…", "addresses the lack of…"). They're not presented as
+  guarantees, or as having "removed" or "eliminated" a risk.
+- **The other arrangements stay addressed.** The feeder, the vaccination booked for after the
+  return, separation, and the friend's instructions remain acknowledged, with no new doubts
+  about their reliability.
+
+**Misattribution or overstatement:**
+- "The friend and neighbour have vet contacts, a symptom list, spending authority…" (this
+  gives the neighbour the friend's instructions and authority).
+- Camera checks attributed to the friend or the neighbour, or left ambiguous in a sentence
+  that lists the friend's and neighbour's roles.
+- "Permanently separated", or dropping "for the whole trip" in a way that changes its
+  meaning.
+- "Removes the conflict risk", "eliminates", or "guarantees".
+- Treating the neighbour as available on the three uncovered days, or the camera as an
+  in-person response.
+
+**Over-correction (also a failure):**
+- Reopening addressed concerns, or questioning whether the user will really check the camera,
+  whether the feeder will work, or whether the friend will follow the instructions, without
+  a finding or answer that makes it relevant.
+- Asking for the neighbour's qualifications or the camera's coverage just because they
+  weren't stated.
+
+To rerun this case (one billable request):
+
+```bash
+dest=runs/evals/clarify-kitten-$(date -u +%Y%m%dT%H%M%SZ)
+mkdir -p runs/evals && cp -R evals/reassessment/kitten-before-holiday "$dest"
+uv run python -m blindspot.clarification reassess \
+  --clarification "$dest/clarification.json" \
+  --responses "$dest/responses-three-uncovered-days.json"
+```

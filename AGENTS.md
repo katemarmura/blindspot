@@ -208,6 +208,12 @@ What exists:
     - With no successful findings, it stops with no call and creates nothing.
     - Otherwise it makes one call (1500 tokens) with `synthesis.build_input` plus the
       existing synthesis, then checks every cited ID in Python (`unknown_source_id`).
+    - The question prompt requires one independently answerable fact, decision, or
+      arrangement per question. It forbids squeezing extra topics in to fit the limit or
+      hiding requests in `why_it_matters`, and it allows consolidation only when one answer
+      bears on several findings. Judge changes with the manual fixtures in
+      `evals/question-generation/` (their `README.md` and `CHECKLIST.md`s), which
+      `tests/test_question_generation_fixtures.py` keeps loadable.
     - It writes a new `runs/team-*/clarify-<UTC>-<hex>/` with `clarification.json`
       (`ClarificationArtifact`: plan, expert assignments and reports, synthesis, sources,
       questions, call metadata; `status: "failed"` plus diagnostics on a failed call) and,
@@ -237,6 +243,11 @@ What exists:
     - report problems an answer reveals;
     - a source ID doesn't justify a stricter concern;
     - empty sections are valid.
+
+    Its attribution rules: keep each action, instruction, permission, and availability with
+    the person it belongs to, and never transfer them to someone else. Preserve durations and
+    conditions, so temporary never becomes permanent. Describe arrangements as reported
+    mitigations, not guarantees. None of this is grounds to reopen addressed concerns.
 
     It also requires titles that keep their item's uncertainty and no point repeated across
     sections, and it forbids inferring unstated dates, timing, or layout and hardening

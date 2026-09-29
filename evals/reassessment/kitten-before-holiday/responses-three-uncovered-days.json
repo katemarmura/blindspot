@@ -1,0 +1,21 @@
+{
+  "clarification_id": "eval-kitten-before-holiday",
+  "instructions": "Fictional contrasting evaluation: same answers as the sufficient case except q3 explicitly leaves three days without in-person care or backup.",
+  "responses": [
+    {
+      "question_id": "q1",
+      "status": "answered",
+      "answer": "The kitten will be 12 weeks old on adoption day and eats solid food twice a day; an automatic feeder will serve its second meal. Its next vaccination is booked for the day after I return, so none is due during the trip."
+    },
+    {
+      "question_id": "q2",
+      "status": "answered",
+      "answer": "They will stay separated for the whole trip whatever happens: the kitten keeps the closable bathroom with its own food, water, litter box, and bed, and the adult cat keeps the rest of the apartment with its own litter box."
+    },
+    {
+      "question_id": "q3",
+      "status": "answered",
+      "answer": "My friend has the vet's contact details, a written list of signs to watch for, and my written permission to take either cat to the vet and approve treatment up to an agreed amount. I've set up a pet camera I check twice a day. However, my friend is away for three of the ten days, and the neighbour is also unavailable on those same days. Nobody will visit or be available to respond in person on those three days; I haven't arranged another person. On the other seven days, my friend visits daily and the neighbour has a key and can respond within an hour."
+    }
+  ]
+}

@@ -1,0 +1,174 @@
+{
+  "run_id": "eval-pet-before-travel",
+  "fixture_note": "FICTIONAL evaluation fixture for question generation; written by hand, no model calls.",
+  "plan": "FICTIONAL EVALUATION FIXTURE. I'm adopting a two-year-old rescue dog next month, two weeks before a seven-day work trip. While I'm away the dog will stay at my sister's house, and she has agreed to look after it.",
+  "status": "success",
+  "team": {
+    "experts": [
+      {
+        "perspective": "Health & Safety",
+        "objective": "Health considerations of moving a newly adopted dog to another home shortly after adoption.",
+        "questions": [
+          "What matters most for health & safety?"
+        ]
+      },
+      {
+        "perspective": "Human & Behavioral",
+        "objective": "How a recently adopted rescue dog may cope with a second move after two weeks.",
+        "questions": [
+          "What matters most for human & behavioral?"
+        ]
+      },
+      {
+        "perspective": "Operations & Logistics",
+        "objective": "Practical arrangements for the week at the sister's house.",
+        "questions": [
+          "What matters most for operations & logistics?"
+        ]
+      }
+    ]
+  },
+  "experts": [
+    {
+      "perspective": "Health & Safety",
+      "status": "success",
+      "report": {
+        "findings": [
+          {
+            "title": "Vaccination status and other animals at the sister's house",
+            "observation": "Depending on whether the sister's household has other animals, the dog's vaccination status could matter for staying there.",
+            "why_it_matters": "An unvaccinated dog sharing space with other animals could create a health risk for either.",
+            "assumptions": [
+              "The sister's household may have other animals",
+              "The dog's vaccinations may not be complete"
+            ],
+            "question_to_check": "(see the clarification step)"
+          },
+          {
+            "title": "Unknown health or medication needs",
+            "observation": "If the rescue dog has ongoing health conditions or medication, the sister would need to manage them for a week.",
+            "why_it_matters": "Missed medication or unnoticed symptoms would be harder to handle while you are away.",
+            "assumptions": [
+              "The dog may have health needs not yet identified at adoption"
+            ],
+            "question_to_check": "(see the clarification step)"
+          }
+        ]
+      },
+      "error": null,
+      "assignment": {
+        "perspective": "Health & Safety",
+        "objective": "Health considerations of moving a newly adopted dog to another home shortly after adoption.",
+        "questions": [
+          "What matters most for health & safety?"
+        ]
+      }
+    },
+    {
+      "perspective": "Human & Behavioral",
+      "status": "success",
+      "report": {
+        "findings": [
+          {
+            "title": "Two weeks may be short to settle before another move",
+            "observation": "A rescue dog may still be adjusting after two weeks, so a move to a new house could add stress.",
+            "why_it_matters": "Stress can show up as hiding, not eating, or escape attempts in an unfamiliar place.",
+            "assumptions": [
+              "The dog will not be settled within two weeks"
+            ],
+            "question_to_check": "(see the clarification step)"
+          },
+          {
+            "title": "Separation-related behaviour is unknown",
+            "observation": "If the dog is anxious when left alone, time alone at the sister's house could lead to distress or damage.",
+            "why_it_matters": "It affects whether the dog can be left alone there and for how long.",
+            "assumptions": [
+              "The sister will sometimes leave the dog alone"
+            ],
+            "question_to_check": "(see the clarification step)"
+          }
+        ]
+      },
+      "error": null,
+      "assignment": {
+        "perspective": "Human & Behavioral",
+        "objective": "How a recently adopted rescue dog may cope with a second move after two weeks.",
+        "questions": [
+          "What matters most for human & behavioral?"
+        ]
+      }
+    },
+    {
+      "perspective": "Operations & Logistics",
+      "status": "success",
+      "report": {
+        "findings": [
+          {
+            "title": "Daytime supervision at the sister's house",
+            "observation": "Depending on the sister's schedule, the dog may be alone for long stretches during the day.",
+            "why_it_matters": "Long periods alone can be hard for a newly adopted dog.",
+            "assumptions": [
+              "The sister is away from home during working hours"
+            ],
+            "question_to_check": "(see the clarification step)"
+          },
+          {
+            "title": "Getting the dog to and from the sister's house",
+            "observation": "The plan does not say how the dog will travel to the sister's house and back.",
+            "why_it_matters": "A stressful or unsecured journey could add to the dog's adjustment difficulties.",
+            "assumptions": [
+              "The sister lives far enough away to need a car journey"
+            ],
+            "question_to_check": "(see the clarification step)"
+          }
+        ]
+      },
+      "error": null,
+      "assignment": {
+        "perspective": "Operations & Logistics",
+        "objective": "Practical arrangements for the week at the sister's house.",
+        "questions": [
+          "What matters most for operations & logistics?"
+        ]
+      }
+    }
+  ],
+  "sources": {
+    "e1-f1": {
+      "expert_position": 1,
+      "perspective": "Health & Safety",
+      "finding_position": 1,
+      "title": "Vaccination status and other animals at the sister's house"
+    },
+    "e1-f2": {
+      "expert_position": 1,
+      "perspective": "Health & Safety",
+      "finding_position": 2,
+      "title": "Unknown health or medication needs"
+    },
+    "e2-f1": {
+      "expert_position": 2,
+      "perspective": "Human & Behavioral",
+      "finding_position": 1,
+      "title": "Two weeks may be short to settle before another move"
+    },
+    "e2-f2": {
+      "expert_position": 2,
+      "perspective": "Human & Behavioral",
+      "finding_position": 2,
+      "title": "Separation-related behaviour is unknown"
+    },
+    "e3-f1": {
+      "expert_position": 3,
+      "perspective": "Operations & Logistics",
+      "finding_position": 1,
+      "title": "Daytime supervision at the sister's house"
+    },
+    "e3-f2": {
+      "expert_position": 3,
+      "perspective": "Operations & Logistics",
+      "finding_position": 2,
+      "title": "Getting the dog to and from the sister's house"
+    }
+  }
+}

@@ -37,6 +37,8 @@ Acceptable:
 - "Has the shelter told you about any ongoing health conditions or medication the dog needs?"
 
 Bundled (fail):
+- "Does anyone else in your sister's household have animals, and if so, are they
+  vaccinated?" (a conditional follow-up: ask the prerequisite on its own)
 - "Does your sister have other pets, and what vaccinations has the dog had?" (two topics)
 - "How will the dog get to your sister's, and will it be alone during the day?" (two topics)
 - A `why_it_matters` of "…; please also confirm whether the dog is microchipped" (a hidden

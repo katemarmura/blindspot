@@ -197,6 +197,14 @@ def summarize_clarification(directory: Path) -> None:
     if not isinstance(artifact, dict):
         print("    clarification.json: missing or unreadable")
         return
+    round_number = artifact.get("round", 1)
+    previous = artifact.get("previous") or {}
+    if round_number != 1:
+        print(
+            f"    FOLLOW-UP ROUND {round_number}: follows {previous.get('clarification_id')} / "
+            f"reassessment {previous.get('reassessment_id')}; "
+            f"prior questions {[q.get('id') for q in artifact.get('prior_questions') or []]}"
+        )
     generation = artifact.get("question_generation") or {}
     generation_called = "usage" in generation or "model" in generation
     if generation_called:
@@ -213,13 +221,15 @@ def summarize_clarification(directory: Path) -> None:
     )
     questions = artifact.get("questions") or []
     question_ids = [q.get("id") for q in questions]
+    # Reports from a follow-up round may also cite the round-1 questions.
+    all_question_ids = [q.get("id") for q in artifact.get("prior_questions") or []] + question_ids
     for q in questions:
         print(f"    {q.get('id')} cites {q.get('source_finding_ids')}")
     unresolved = _unresolved(questions, "source_finding_ids", known_sources)
     if unresolved:
         print(f"    UNRESOLVED question citations: {unresolved}")
-    if len(set(question_ids)) != len(question_ids):
-        print(f"    DUPLICATE question IDs: {question_ids}")
+    if len(set(all_question_ids)) != len(all_question_ids):
+        print(f"    DUPLICATE question IDs: {all_question_ids}")
 
     current: dict[str, list[tuple[Any, Any, Any]]] = {}
     for responses_path in sorted(directory.glob("responses*.json")):
@@ -237,7 +247,7 @@ def summarize_clarification(directory: Path) -> None:
     clarification_usages = [generation.get("usage")] if generation_called else []
     for path in sorted(directory.glob("reassessment-*.json")):
         clarification_usages.append(
-            summarize_reassessment(path, question_ids, known_sources, current)
+            summarize_reassessment(path, all_question_ids, known_sources, current)
         )
     known = [u for u in clarification_usages if isinstance(u, dict)]
     incomplete = len(known) != len(clarification_usages) or any(
@@ -274,7 +284,14 @@ def summarize_reassessment(
         f"      used responses ({responses_name}): {statuses}, "
         f"unanswered: {data.get('unanswered_question_ids')}"
     )
-    if responses_name in current and current[responses_name] != recorded:
+    round_number = data.get("clarification_round", 1)
+    if round_number != 1:
+        print(f"      round {round_number}: used responses from every round (tagged by round)")
+    # The response file holds only this round's answers; compare against those.
+    this_round = _normalized(
+        [r for r in data.get("recorded_responses") or [] if r.get("round", 1) == round_number]
+    )
+    if responses_name in current and current[responses_name] != this_round:
         print(f"      NOTE: {responses_name} has changed since this reassessment was made")
     report = data.get("report")
     if not isinstance(report, dict):

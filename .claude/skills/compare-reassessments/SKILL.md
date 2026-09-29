@@ -52,7 +52,8 @@ Rules:
 - Judge by the saved prompt text, not the git revision: a dirty tree or later commit may
   differ from what ran.
 - Use each file's `recorded_responses`, never the current `responses*.json`, which may have
-  been edited since.
+  been edited since. A round-2 file lists both rounds' responses, each tagged with
+  `round`.
 - Missing metadata is **unknown**, not "same".
 
 Read what the classification means for your conclusions:
@@ -63,6 +64,7 @@ Read what the classification means for your conclusions:
 | Answer change (same context and prompt) | Judge whether the conclusions changed appropriately for the changed answers, and stayed put where answers didn't change. |
 | Same inputs and settings | Differences are run-to-run variation. Describe them; don't call either run better "because of" anything. |
 | Multiple changes | Describe the differences without attributing them to one cause. |
+| Round change (round 1 → round 2) | The later report reflects a different question set and accumulated answers. Check that it updates the concerns the new answers cover and keeps round-1 answers as recorded, without attributing differences to one cause. |
 | Different investigations | Stop and ask the user (see above). |
 
 For the plan, findings, and questions themselves, read the side's `clarification.json`. For

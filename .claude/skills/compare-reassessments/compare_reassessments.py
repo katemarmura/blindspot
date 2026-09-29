@@ -132,6 +132,13 @@ def classify(a: Side, b: Side) -> str:
     ctx_a, ctx_b = _context(a), _context(b)
     if ctx_a["plan"] != ctx_b["plan"] or ctx_a["findings"] != ctx_b["findings"]:
         return "different investigations (plan or findings differ): do not compare quality"
+    round_a = a.data.get("clarification_round", 1)
+    round_b = b.data.get("clarification_round", 1)
+    if round_a != round_b:
+        return (
+            f"round change (round {round_a} -> round {round_b}): different question sets and "
+            "accumulated answers; describe differences without attributing them to one cause"
+        )
     changes: list[str] = []
     unknown: list[str] = []
     for name, left, right in (
@@ -178,7 +185,10 @@ def _structure_notes(side: Side) -> list[str]:
     known_sources = _derived_sources(
         [{"report": e.get("report")} for e in artifact.get("experts") or []]
     )
-    question_ids = {str(q.get("id")) for q in artifact.get("questions") or []}
+    question_ids = {
+        str(q.get("id"))
+        for q in [*(artifact.get("prior_questions") or []), *(artifact.get("questions") or [])]
+    }
     responses = _responses(side) or {}
     for section in SECTIONS:
         items = report.get(section) or []
@@ -224,8 +234,8 @@ def _show(value: Any) -> str:
 
 
 def compare(a: Side, b: Side, *, prompt_diff: bool = True) -> None:
-    print(f"A: {a.path}")
-    print(f"B: {b.path}")
+    print(f"A: {a.path} (round {a.data.get('clarification_round', 1)})")
+    print(f"B: {b.path} (round {b.data.get('clarification_round', 1)})")
     print(f"Classification: {classify(a, b)}")
 
     print("\nContext (from each side's clarification.json):")

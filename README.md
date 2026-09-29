@@ -242,7 +242,7 @@ twelve**.
 A comparison this small is exploratory. It can show differences worth a closer look, but it
 isn't evidence of a definitive ranking between models.
 
-#### Clarification round (one batch, manual)
+#### Clarification round (manual, with one optional follow-up)
 
 After an `--auto-team` run, you can answer a few questions and get a reassessment. There are
 two explicit steps, each making **at most one billable request** with no retries:
@@ -265,6 +265,8 @@ uv run python -m blindspot.clarification reassess \
   single arrangement. Separate topics aren't bundled to fit the three-question limit; the
   lower-priority ones are left out. A question cites several findings only when one answer
   bears on all of them, and the "why it matters" line carries no hidden extra requests.
+  Conditional follow-ups ("and if so, …") aren't attached: when one answer decides whether
+  another question matters, only the first is asked.
 - It uses the plan, the successful experts' findings, failed perspectives (as missing
   coverage), and the synthesis if there is one.
 - Each question cites the finding IDs it bears on (for example `e1-f2`), and its
@@ -320,6 +322,37 @@ The prompt tells the model:
 - not to harden a conditional finding into a categorical claim;
 - to read an `answered` response by what it says ("I don't know yet" is still uncertain).
 
+**One follow-up round (optional).** After a successful reassessment you can ask for one
+focused follow-up batch. It's 1 billable request to generate the questions, and 1 more to
+reassess once you've answered them:
+
+```bash
+# 3. Generate up to three follow-up questions from a successful reassessment
+uv run python -m blindspot.clarification followup \
+  --reassessment runs/team-<id>/clarify-<id>/reassessment-<id>.json
+
+# 4. Edit the new runs/team-<id>/clarify-<id2>/responses.json, then:
+uv run python -m blindspot.clarification reassess \
+  --clarification runs/team-<id>/clarify-<id2>/clarification.json \
+  --responses runs/team-<id>/clarify-<id2>/responses.json
+```
+
+- **What it asks about:** only what the reassessment left open, where an answer could
+  change the conclusion. It won't repeat round-1 questions: "I don't know" counts as an
+  answer, and deferred questions aren't re-asked just because they're open. It won't reopen
+  addressed concerns or start a new investigation.
+- **Zero questions** means "no useful follow-up", not that the plan is risk-free.
+- **Numbering:** follow-up questions continue the numbering (`q4`, …), and the new folder
+  records which batch and reassessment it came from.
+- **Answers come from the saved reassessment:** it uses the answers that reassessment
+  actually recorded, even if you've edited the old `responses.json` since. Earlier files are
+  never changed.
+- **The follow-up reassessment** considers your answers from both rounds, each labelled
+  with its round and status. The new `responses.json` covers only the new questions, so
+  round-1 answers can't be overwritten.
+- **Only one follow-up round:** asking for another from a follow-up's reassessment is
+  rejected before any call.
+
 Your answers are treated as reported context, not verified facts. "I don't know" and
 deferral leave uncertainty open rather than proving a risk, and "not applicable" records
 your assessment without automatically resolving related concerns. Each step reports only
@@ -370,6 +403,14 @@ This runs the CI checks locally, in CI's order, through the uv-managed environme
 never formats, auto-fixes, or rewrites `uv.lock` (an out-of-date lockfile makes it fail).
 It makes no API calls. Every check runs even if an earlier one fails; failures are listed at
 the end, and the exit code is nonzero.
+
+### Follow-up round quality check (manual, live)
+
+`evals/followup/kitten-after-first-round/` is a small **fictional** case: a round-1 batch
+plus a hand-written successful reassessment whose answers mix `answered`, `dont_know`, and
+`deferred`. Its `CHECKLIST.md` describes good follow-ups (open prerequisites; no repeats; no
+re-asking deferred questions; no new investigation), how to copy it into `runs/evals/` and
+run it (one billable request), and what to check after reassessing round 2.
 
 ### Question-generation quality check (manual, live)
 
@@ -457,7 +498,7 @@ src/blindspot/compare.py   # two-model comparison CLI (results saved under runs/
 src/blindspot/team.py      # perspective catalogue + one-call team selector
 src/blindspot/synthesis.py # source IDs + one-call synthesis (auto-team only)
 src/blindspot/runs.py      # shared helpers for saving results under runs/
-src/blindspot/clarification.py  # one clarification round: prepare questions, reassess
+src/blindspot/clarification.py  # clarification: prepare, reassess, one follow-up round
 src/blindspot/llm_smoke.py  # connection smoke-check CLI
 tests/                   # pytest suite
 docs/                    # design notes and the original project brief

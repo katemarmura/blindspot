@@ -1,0 +1,96 @@
+{
+  "reassessment_id": "20260101T000000Z-fixture",
+  "created_at": "2026-01-01T00:00:00+00:00",
+  "fixture_note": "FICTIONAL evaluation fixture: a hand-written successful round-1 reassessment; no model call was made.",
+  "clarification_id": "eval-kitten-before-holiday",
+  "clarification_file": "clarification.json",
+  "responses_file": "(fictional; answers are recorded below)",
+  "status": "success",
+  "recorded_responses": [
+    {
+      "question_id": "q1",
+      "status": "answered",
+      "answer": "The kitten is 1.5 months old. It has a microchip and its first vaccination; more vaccines are due at 2.5 months."
+    },
+    {
+      "question_id": "q2",
+      "status": "dont_know",
+      "answer": null
+    },
+    {
+      "question_id": "q3",
+      "status": "deferred",
+      "answer": null
+    }
+  ],
+  "unanswered_question_ids": [],
+  "report": {
+    "remaining_considerations": [
+      {
+        "title": "Care may need more than one daily visit",
+        "observation": "The user reports the kitten is 1.5 months old; if its care needs are frequent, one daily visit may not cover them.",
+        "why_it_matters": "Care sized for one visit a day could fall short for a young kitten.",
+        "source_finding_ids": [
+          "e2-f1"
+        ],
+        "question_ids": [
+          "q1"
+        ]
+      },
+      {
+        "title": "Separation fallback not decided",
+        "observation": "The user does not yet know how the cats would be kept apart if they are not comfortable together by departure.",
+        "why_it_matters": "Without a fallback, an unsettled introduction continues unsupervised during the trip.",
+        "source_finding_ids": [
+          "e1-f1",
+          "e1-f2"
+        ],
+        "question_ids": [
+          "q2"
+        ]
+      },
+      {
+        "title": "Problems between visits",
+        "observation": "With one visit a day, a problem that starts between visits may go unnoticed until the next visit.",
+        "why_it_matters": "A problem could go unaddressed for up to a day.",
+        "source_finding_ids": [
+          "e2-f2"
+        ],
+        "question_ids": []
+      }
+    ],
+    "addressed_concerns": [],
+    "unresolved_uncertainties": [
+      {
+        "summary": "Whether the next vaccination falls before, during, or after the trip; no dates are given.",
+        "source_finding_ids": [
+          "e3-f1"
+        ],
+        "question_ids": [
+          "q1"
+        ]
+      },
+      {
+        "summary": "What the friend has been told to watch for or may decide; the user deferred this question.",
+        "source_finding_ids": [
+          "e3-f2"
+        ],
+        "question_ids": [
+          "q3"
+        ]
+      }
+    ]
+  },
+  "requested_model": null,
+  "model": null,
+  "elapsed_seconds": null,
+  "usage": null,
+  "call_diagnostics": null,
+  "error": null,
+  "diagnostics": null,
+  "settings": {
+    "system_prompt": null,
+    "max_output_tokens": null,
+    "git": null
+  }
+}

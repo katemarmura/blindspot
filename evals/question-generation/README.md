@@ -17,7 +17,7 @@ question quality.
 
 ## Running a live check
 
-`prepare` is **one billable request** (up to 1,500 output tokens) and writes a `clarify-*`
+`prepare` is **one billable request** (up to 15,000 output tokens) and writes a `clarify-*`
 folder inside the run folder. Copy the fixture into the git-ignored `runs/` first, so the
 output doesn't land in the committed fixture. Keep the `team-` prefix so the `inspect-run`
 helper recognizes the copy.
@@ -45,6 +45,18 @@ Fail, or Unclear, with a short quote. Record the prompt revision
       sentence, with no extra questions or requests ("…and also confirm whether…").
 - [ ] **Examples stay examples.** Examples in a question clarify it without becoming a
       checklist of separate things to answer.
+- [ ] **Conditional follow-ups count as separate questions.** "…and if so, …", "…if not,
+      …", or "…or will X be needed?" add a second question that can get a different answer
+      (for example "yes" to the first part and "I don't know" to the second). That fails.
+- [ ] **Prerequisites stand alone.** When one answer decides whether another question
+      matters, only the prerequisite is asked. The dependent question is left for later,
+      not attached.
+- [ ] **Current state and solution aren't bundled.** A question about what exists or is
+      planned doesn't also ask the user to choose or explain what they'll do about it.
+- [ ] **Coherent arrangements are still fine.** One question about a single quantity,
+      decision, or arrangement passes even with "and" or several details. For example,
+      "What opening days and hours are you planning?" is one arrangement, not two
+      questions. Judge by whether parts could be answered separately, not by punctuation.
 - [ ] **Nothing already answered.** No question asks what the plan states, and no two
       questions ask the same thing.
 - [ ] **Meaningful priority.** The questions chosen are the ones whose answers could most

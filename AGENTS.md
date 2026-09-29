@@ -26,22 +26,27 @@ After a small batch, reassessment uses accumulated answers to refine concerns an
 useful follow-ups, ending with a short tailored conclusion. See the dated update in
 [`docs/project-brief.md`](docs/project-brief.md) for semantics and open design decisions.
 
-Only a first, manual round is implemented: `blindspot.clarification` (below) generates one
-batch of up to three questions from a saved auto-team run and reassesses once from a
-user-edited JSON response file. Not yet implemented: one-question-at-a-time interaction,
-suggested answers, follow-up batches, stopping rules, and a tailored final conclusion.
+Implemented so far, all manual (`blindspot.clarification`, below):
+- one batch of up to three questions from a saved auto-team run;
+- one reassessment from a user-edited JSON response file;
+- **one** optional follow-up batch (round 2), started from a successful round-1
+  reassessment and reassessed with the answers from both rounds.
+
+Not yet implemented: one-question-at-a-time interaction, suggested answers, more than one
+follow-up round, automatic stopping between rounds, and a tailored final conclusion.
 Preserve the existing CLI as a baseline; do not speculatively add a UI, database,
 framework, or automatic multi-round loop. Keep user answers distinct from expert
 assumptions, and retain links to original findings.
 
-## Current scope: minimal server, a single-expert experiment, a multi-expert runner (manual or auto-selected team), a model-comparison CLI, and one manual clarification round
+## Current scope: minimal server, a single-expert experiment, a multi-expert runner (manual or auto-selected team), a model-comparison CLI, and a manual clarification round with one follow-up
 
 **As of now, this repository contains a project scaffold, a bare FastAPI server, and one
 small domain contract with one real LLM call (plus at most one bounded recovery call)
 built on it. It runs alone, concurrently for 1–3 caller-supplied perspectives, for a
 1–3 expert team proposed by one team-selector call (followed by one synthesis call), or
 across two named models for manual comparison. A saved auto-team run can then go through
-one clarification round (one question call, one reassessment call).**
+one clarification round (one question call, one reassessment call), plus at most one manual
+follow-up round (one follow-up question call, one reassessment call).**
 There is still no cross-review, no adaptive rounds, no skills, tools,
 permissions or model routing, no shared investigation state, and no database. Those are
 deliberately being designed before they are implemented (see the open questions in
@@ -183,8 +188,9 @@ What exists:
     are exploratory, not a model ranking.
 - `src/blindspot/runs.py` — shared `runs/` helpers (`create_run_dir`, atomic `write_json`,
   `utc_now`, `git_state`) used by `compare` and `--auto-team`.
-- `src/blindspot/clarification.py` — one clarification round over a saved auto-team run,
-  as two explicit subcommands. Each makes at most one call (60s, `max_retries=0`, no
+- `src/blindspot/clarification.py` — clarification over a saved auto-team run, as three
+  explicit subcommands (`prepare`, `reassess`, and `followup`; see the follow-up bullet
+  below). Each makes at most one call (60s, `max_retries=0`, no
   recovery or repair) and reports only its own usage, so the original run's calls are not
   counted again.
   - **Contracts (`schemas.py`):**
@@ -206,12 +212,14 @@ What exists:
       saved `sources` mapping if there is one (older runs have none). A completed synthesis
       is included if its citations resolve.
     - With no successful findings, it stops with no call and creates nothing.
-    - Otherwise it makes one call (1500 tokens) with `synthesis.build_input` plus the
+    - Otherwise it makes one call (15000 tokens) with `synthesis.build_input` plus the
       existing synthesis, then checks every cited ID in Python (`unknown_source_id`).
     - The question prompt requires one independently answerable fact, decision, or
       arrangement per question. It forbids squeezing extra topics in to fit the limit or
       hiding requests in `why_it_matters`, and it allows consolidation only when one answer
-      bears on several findings. Judge changes with the manual fixtures in
+      bears on several findings. Conditional follow-ups ("and if so…") count as separate
+      questions: only the prerequisite is asked, and the current state isn't bundled with the
+      user's intended solution. There's no punctuation-based filter; this is prompt guidance. Judge changes with the manual fixtures in
       `evals/question-generation/` (their `README.md` and `CHECKLIST.md`s), which
       `tests/test_question_generation_fixtures.py` keeps loadable.
     - It writes a new `runs/team-*/clarify-<UTC>-<hex>/` with `clarification.json`
@@ -255,8 +263,38 @@ What exists:
 
     The rules stay general, with no domain-specific wording. Judge prompt changes with the
     manual fixture in `evals/reassessment/` (its `CHECKLIST.md`), not with mocked tests.
-  - Diagnostics use the `clarification_questions` and `reassessment` stages (errors are
-    `ClarificationError`); invalid input files raise `ClarificationInputError`.
+  - **`followup --reassessment …/reassessment-*.json` (round 2, manual, at most once):**
+    - `load_followup_source` validates everything before any call or file is created:
+      - the reassessment is a successful round-1 one with a report;
+      - its artifact is found (the recorded `clarification_file`, else the sibling
+        `clarification.json`) and its `clarification_id` matches;
+      - the saved `recorded_responses` plus `unanswered_question_ids` cover the batch's
+        questions exactly;
+      - the report's references resolve.
+      A round-2 reassessment or artifact is rejected ("only one follow-up round").
+    - It makes one call (`FOLLOWUP_QUESTIONS_SYSTEM_PROMPT`, `QUESTIONS_MAX_OUTPUT_TOKENS`).
+      The input is the original context, the round-1 questions, the reassessment's **saved**
+      recorded responses (never the possibly edited `responses.json`), the unanswered IDs,
+      and the report, labelled as a model interpretation.
+    - It writes a new `clarify-*` folder next to the round-1 one. The artifact has
+      `round: 2`, `previous` lineage (`ClarificationLineage`), and copies of
+      `prior_questions`, `prior_responses`, `prior_unanswered_question_ids`, and
+      `prior_reassessment`. Its own `questions` continue the numbering (`q4`…), so IDs are
+      unique across rounds. Zero questions prints "No useful follow-up", which is not a
+      claim that the plan is risk-free.
+    - Round-1 artifacts are still written in the old format (the round-2 fields are
+      omitted), and older files load with `round: 1`.
+    - `reassess` on a round-2 artifact:
+      - the response file may answer only round-2 questions, so round-1 answers can't be
+        overwritten;
+      - "no new context" is judged on this round alone;
+      - the input lists both rounds' questions and recorded responses tagged by round (the
+        round-1 report isn't included);
+      - references and "addressed" checks use both rounds' questions and answers;
+      - the saved file has `clarification_round: 2` and round-tagged `recorded_responses`.
+  - Diagnostics use the `clarification_questions`, `reassessment`, and `followup_questions`
+    stages (errors are `ClarificationError`); invalid input files raise
+    `ClarificationInputError`.
   - Call diagnostics (`CallDiagnostics`) are saved as `call_diagnostics`, on success and on
     failure, in `question_generation` and in each `reassessment-*.json`. They record:
     - the requested model and output-token limit, and the elapsed time (failed calls
@@ -331,6 +369,11 @@ discussion, not specifications to implement as-is.
   own fake on top. `tests/test_clarification.py` writes a saved run into `tmp_path` and
   covers the contracts, loading, both subcommands, the no-call cases, reference checks, and
   that original files are unchanged (by hashing them before and after).
+  `tests/test_clarification_followup.py` covers the follow-up round with a fake client:
+  generation, IDs across rounds, lineage, saved-answer provenance, round-2 reassessment with
+  accumulated answers, rejection before any call (invalid lineage, third rounds), zero
+  questions, failures, the round-1 file format, and both helpers on round-2 files. The
+  manual case lives in `evals/followup/`.
   `tests/test_reassessment_eval_fixture.py` only checks that the committed `evals/` fixture
   stays loadable through `load_artifact`/`load_responses`. It is not a quality test.
 - **Layout:** `src/` layout — the package is `src/blindspot/`, importable only once

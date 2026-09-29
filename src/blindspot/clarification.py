@@ -1,4 +1,4 @@
-"""One clarification round over a saved `--auto-team` run: questions, then reassessment.
+"""Clarification over a saved `--auto-team` run: questions, reassessment, one follow-up.
 
 Run with:
     uv run python -m blindspot.clarification prepare --run runs/team-<id>
@@ -6,15 +6,25 @@ Run with:
     uv run python -m blindspot.clarification reassess \\
         --clarification runs/team-<id>/clarify-<id>/clarification.json \\
         --responses runs/team-<id>/clarify-<id>/responses.json
+    # optionally, one follow-up round (round 2):
+    uv run python -m blindspot.clarification followup \\
+        --reassessment runs/team-<id>/clarify-<id>/reassessment-<id>.json
+    # edit the new clarify-<id2>/responses.json, then reassess it the same way
 
 `prepare` loads the run's `result.json`, makes one structured-output call for
 up to three questions (citing original finding IDs), and writes a new
 `clarify-*` directory with `clarification.json` and an editable
 `responses.json` template. `reassess` validates both files and makes one call
 that reassesses the original findings in light of the recorded responses,
-saved as a new `reassessment-*.json`. Each command makes at most one model
-call: no recovery, retries, or repair. Original run files are never modified,
-and experts are never rerun. This is one round, not an automatic loop.
+saved as a new `reassessment-*.json`. `followup` takes a successful round-1
+reassessment and makes one call for up to three follow-up questions, saved as
+a new round-2 `clarify-*` directory that records its lineage and the round-1
+questions and answers; reassessing it uses the answers from both rounds.
+
+Each command makes at most one model call: no recovery, retries, or repair.
+Original run files and earlier clarification files are never modified, and
+experts are never rerun. Every transition is manual; there is no automatic
+loop, and a third round is rejected.
 """
 
 import argparse
@@ -33,7 +43,7 @@ from typing import Any, Literal
 import anthropic
 import pydantic
 from anthropic.types import Message, TextBlock
-from pydantic import BaseModel, ConfigDict, model_validator
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from blindspot.config import get_anthropic_api_key, get_anthropic_model
 from blindspot.expert import (
@@ -50,7 +60,11 @@ from blindspot.expert import (
     _response_text,
     _validation_issues,
 )
-from blindspot.prompts import CLARIFICATION_QUESTIONS_SYSTEM_PROMPT, REASSESSMENT_SYSTEM_PROMPT
+from blindspot.prompts import (
+    CLARIFICATION_QUESTIONS_SYSTEM_PROMPT,
+    FOLLOWUP_QUESTIONS_SYSTEM_PROMPT,
+    REASSESSMENT_SYSTEM_PROMPT,
+)
 from blindspot.runs import create_run_dir, git_state, utc_now, write_json
 from blindspot.schemas import (
     ClarificationQuestion,
@@ -65,7 +79,7 @@ from blindspot.schemas import (
 )
 from blindspot.synthesis import ExpertInput, SourceRef, build_input, source_map
 
-QUESTIONS_MAX_OUTPUT_TOKENS = 1500
+QUESTIONS_MAX_OUTPUT_TOKENS = 15000
 REASSESSMENT_MAX_OUTPUT_TOKENS = 15000
 
 ARTIFACT_FILENAME = "clarification.json"
@@ -296,7 +310,10 @@ async def _structured_call[T: BaseModel](
     model = get_anthropic_model()
     usage = UsageSummary()
     call = CallDiagnostics(requested_model=model, max_output_tokens=max_tokens, usage=usage)
-    label = "Question generation" if stage == "clarification_questions" else "Reassessment"
+    label = {
+        "clarification_questions": "Question generation",
+        "followup_questions": "Follow-up question generation",
+    }.get(stage, "Reassessment")
     start = time.monotonic()
 
     async with anthropic.AsyncAnthropic(
@@ -410,12 +427,41 @@ class _ArtifactExpert(BaseModel):
     report: ExpertReport | None
 
 
+class ClarificationLineage(BaseModel):
+    """Where a follow-up (round 2) batch came from: the round-1 batch and reassessment."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    clarification_id: str
+    clarification_file: str
+    reassessment_id: str
+    reassessment_file: str
+
+
+# Fields only a follow-up (round 2) artifact uses; omitted from round-1 files so
+# their saved format is unchanged.
+_ROUND_2_FIELDS = {
+    "round",
+    "previous",
+    "prior_questions",
+    "prior_responses",
+    "prior_unanswered_question_ids",
+    "prior_reassessment",
+}
+
+
 class ClarificationArtifact(BaseModel):
     """`clarification.json`: the original context, questions, and call metadata.
 
     Holds everything reassessment needs, so it doesn't depend on the run's
     files. Source IDs are re-derived from `experts` when loaded; the saved
     `sources` are for inspection.
+
+    A follow-up batch (`round` 2) also records its lineage (`previous`) and
+    copies of the round-1 questions, the recorded responses its reassessment
+    used, the questions left unanswered, and that reassessment's report. Its
+    own `questions` are only the new ones, with IDs continuing after round 1.
+    Only one follow-up round is supported.
     """
 
     model_config = ConfigDict(extra="forbid")
@@ -430,16 +476,62 @@ class ClarificationArtifact(BaseModel):
     sources: dict[str, dict[str, Any]]
     questions: list[ClarificationQuestion]
     question_generation: dict[str, Any]
+    round: Literal[1, 2] = 1
+    previous: ClarificationLineage | None = None
+    prior_questions: list[ClarificationQuestion] = Field(default_factory=list)
+    prior_responses: list[ResponseEntry] = Field(default_factory=list)
+    prior_unanswered_question_ids: list[str] = Field(default_factory=list)
+    prior_reassessment: ReassessmentReport | None = None
 
     @model_validator(mode="after")
     def _check_unique_question_ids(self) -> "ClarificationArtifact":
-        # Responses are matched to questions by ID, so a duplicate would attach
-        # one answer to more than one question.
-        ids = [q.id for q in self.questions]
+        # Responses are matched to questions by ID, so a duplicate (within a
+        # round or across rounds) would attach one answer to more than one question.
+        ids = [q.id for q in self.all_questions]
         duplicates = sorted({qid for qid in ids if ids.count(qid) > 1})
         if duplicates:
             raise ValueError(f"duplicate question IDs: {', '.join(duplicates)}")
         return self
+
+    @model_validator(mode="after")
+    def _check_round(self) -> "ClarificationArtifact":
+        prior = (
+            self.previous,
+            self.prior_questions,
+            self.prior_responses,
+            self.prior_unanswered_question_ids,
+            self.prior_reassessment,
+        )
+        if self.round == 1:
+            if any(prior):
+                raise ValueError("a round-1 artifact cannot carry earlier-round data")
+            return self
+        if self.previous is None or self.prior_reassessment is None or not self.prior_questions:
+            raise ValueError(
+                "a follow-up artifact needs its lineage, prior questions, and prior reassessment"
+            )
+        if any(r.status is None for r in self.prior_responses):
+            raise ValueError("prior responses must all have a status")
+        # Every prior question must appear exactly once: either with its recorded
+        # response or as unanswered. Otherwise earlier answers could silently vanish.
+        accounted = sorted(
+            [r.question_id for r in self.prior_responses] + self.prior_unanswered_question_ids
+        )
+        if accounted != sorted(q.id for q in self.prior_questions):
+            raise ValueError(
+                "each prior question must appear exactly once, in prior_responses or "
+                "prior_unanswered_question_ids"
+            )
+        return self
+
+    @property
+    def all_questions(self) -> list[ClarificationQuestion]:
+        return [*self.prior_questions, *self.questions]
+
+    def to_json(self) -> dict[str, Any]:
+        exclude = _ROUND_2_FIELDS if self.round == 1 else set()
+        data: dict[str, Any] = self.model_dump(mode="json", exclude=exclude)
+        return data
 
     def context(self) -> InvestigationContext:
         experts = [ExpertInput(e.position, e.assignment, e.report) for e in self.experts]
@@ -565,7 +657,7 @@ async def prepare(run_dir: Path) -> PreparedClarification:
         questions=questions,
         question_generation=generation,
     )
-    write_json(directory / ARTIFACT_FILENAME, artifact.model_dump(mode="json"))
+    write_json(directory / ARTIFACT_FILENAME, artifact.to_json())
     if error is None:
         write_json(directory / TEMPLATE_FILENAME, _template(artifact, context.sources))
     return PreparedClarification(directory, artifact, call, error)
@@ -598,7 +690,7 @@ def load_artifact(path: Path) -> ClarificationArtifact:
             "Clarification artifact records a failed question-generation call; run prepare again"
         )
     context = artifact.context()
-    for q in artifact.questions:
+    for q in artifact.all_questions:
         if any(sid not in context.sources for sid in q.source_finding_ids):
             raise ClarificationInputError(
                 f"Clarification artifact is inconsistent: {q.id} cites unknown source IDs"
@@ -644,11 +736,50 @@ def _response_json(entry: ResponseEntry) -> dict[str, Any]:
     return {"question_id": entry.question_id, "status": entry.status, "answer": entry.answer}
 
 
+def _accumulated(artifact: ClarificationArtifact, current: RecordedResponses) -> RecordedResponses:
+    """Round 1: the current responses. Round 2: saved round-1 responses plus current ones."""
+    if artifact.round == 1:
+        return current
+    return RecordedResponses(
+        [*artifact.prior_responses, *current.recorded],
+        [*artifact.prior_unanswered_question_ids, *current.unanswered],
+    )
+
+
+def _accumulated_json(
+    artifact: ClarificationArtifact, current: RecordedResponses
+) -> list[dict[str, Any]]:
+    """Responses from every round, each tagged with its round (round-2 artifacts only)."""
+    return [
+        *({**_response_json(r), "round": 1} for r in artifact.prior_responses),
+        *({**_response_json(r), "round": artifact.round} for r in current.recorded),
+    ]
+
+
 def _reassessment_input(artifact: ClarificationArtifact, responses: RecordedResponses) -> str:
     context = artifact.context()
 
     def dump(value: object) -> str:
         return json.dumps(value, indent=2, ensure_ascii=False)
+
+    if artifact.round == 2:
+        prior_ids = {q.id for q in artifact.prior_questions}
+        questions = [
+            {
+                **q.model_dump(),
+                "round": 1 if q.id in prior_ids else 2,
+                "perspectives": question_perspectives(q, context.sources),
+            }
+            for q in artifact.all_questions
+        ]
+        combined = _accumulated(artifact, responses)
+        return (
+            f"{build_input(context.plan, context.experts)}\n\n"
+            f"Clarification questions from both rounds:\n{dump(questions)}\n\n"
+            "Recorded responses from both rounds (reported by the user; not independently "
+            f"verified):\n{dump(_accumulated_json(artifact, responses))}\n\n"
+            f"Unanswered questions (no response recorded):\n{dump(combined.unanswered)}"
+        )
 
     questions = [
         {**q.model_dump(), "perspectives": question_perspectives(q, context.sources)}
@@ -667,7 +798,7 @@ def _reassessment_reference_issues(
     report: ReassessmentReport, artifact: ClarificationArtifact, responses: RecordedResponses
 ) -> tuple[ValidationIssue, ...]:
     sources = artifact.context().sources
-    question_ids = {q.id for q in artifact.questions}
+    question_ids = {q.id for q in artifact.all_questions}
     issues: list[ValidationIssue] = []
 
     def issue(loc: str, kind: str) -> None:
@@ -728,11 +859,27 @@ async def reassess(artifact_path: Path, responses_path: Path) -> Reassessment:
             user_content=_reassessment_input(artifact, responses),
             output_schema=ReassessmentReport,
             max_tokens=REASSESSMENT_MAX_OUTPUT_TOKENS,
-            check=lambda parsed: _reassessment_reference_issues(parsed, artifact, responses),
+            check=lambda parsed: _reassessment_reference_issues(
+                parsed, artifact, _accumulated(artifact, responses)
+            ),
         )
     except ClarificationError as exc:
         error = exc
         call = exc.call
+
+    if artifact.round == 1:
+        round_fields: dict[str, Any] = {
+            "recorded_responses": [_response_json(r) for r in responses.recorded],
+            "unanswered_question_ids": responses.unanswered,
+        }
+    else:
+        # Every round's responses, each tagged with its round, so the file shows
+        # exactly which answers this reassessment used.
+        round_fields = {
+            "clarification_round": artifact.round,
+            "recorded_responses": _accumulated_json(artifact, responses),
+            "unanswered_question_ids": _accumulated(artifact, responses).unanswered,
+        }
 
     reassessment_id = f"{datetime.now(UTC):%Y%m%dT%H%M%SZ}-{secrets.token_hex(3)}"
     path = artifact_path.parent / f"reassessment-{reassessment_id}.json"
@@ -747,8 +894,7 @@ async def reassess(artifact_path: Path, responses_path: Path) -> Reassessment:
             "clarification_file": str(artifact_path),
             "responses_file": str(responses_path),
             "status": "failed" if error is not None else "success",
-            "recorded_responses": [_response_json(r) for r in responses.recorded],
-            "unanswered_question_ids": responses.unanswered,
+            **round_fields,
             "report": report.model_dump() if report is not None else None,
             "requested_model": requested_model,
             **_call_fields(call, error),
@@ -761,6 +907,241 @@ async def reassess(artifact_path: Path, responses_path: Path) -> Reassessment:
         },
     )
     return Reassessment(path, report, call, error, responses)
+
+
+# --- Follow-up round (round 2) ---
+
+
+class _SavedResponse(BaseModel):
+    """A response as saved in a reassessment file (older and newer formats)."""
+
+    model_config = ConfigDict(extra="ignore")
+
+    question_id: str
+    status: ResponseStatus
+    answer: str | None = None
+
+
+class _SavedReassessment(BaseModel):
+    """The parts of a saved `reassessment-*.json` a follow-up round depends on."""
+
+    model_config = ConfigDict(extra="ignore")
+
+    reassessment_id: str
+    clarification_id: str
+    clarification_file: str | None = None
+    clarification_round: int = 1
+    status: Literal["success", "failed"]
+    recorded_responses: list[_SavedResponse]
+    unanswered_question_ids: list[str]
+    report: ReassessmentReport | None = None
+
+
+@dataclass(frozen=True)
+class FollowupSource:
+    """A validated round-1 batch and the successful reassessment a follow-up builds on."""
+
+    reassessment_path: Path
+    reassessment: _SavedReassessment
+    artifact_path: Path
+    artifact: ClarificationArtifact
+    responses: RecordedResponses
+
+
+def _artifact_path_for(reassessment_path: Path, saved: _SavedReassessment) -> Path:
+    candidates = [reassessment_path.parent / ARTIFACT_FILENAME]
+    if saved.clarification_file:
+        candidates.insert(0, Path(saved.clarification_file))
+    for candidate in candidates:
+        if candidate.is_file():
+            return candidate
+    raise ClarificationInputError(
+        f"Clarification artifact for this reassessment not found (tried {candidates[0]})"
+    )
+
+
+def load_followup_source(reassessment_path: Path) -> FollowupSource:
+    """Validate everything a follow-up round needs, before any call or file is created.
+
+    Requires a successful round-1 reassessment whose clarification ID matches
+    its artifact, whose saved responses cover exactly that batch's questions,
+    and whose report references resolve. A round-2 reassessment or artifact is
+    rejected: only one follow-up round is supported.
+    """
+    saved: _SavedReassessment = _validate(
+        _SavedReassessment, _read_json(reassessment_path, "Reassessment"), "Reassessment"
+    )
+    if saved.clarification_round != 1:
+        raise ClarificationInputError(
+            "This reassessment is already from a follow-up round; only one follow-up round "
+            "is supported, so no further questions can be generated. No call was made."
+        )
+    if saved.status != "success" or saved.report is None:
+        raise ClarificationInputError(
+            "A follow-up needs a successful reassessment with a report; this one failed. "
+            "No call was made."
+        )
+    artifact_path = _artifact_path_for(reassessment_path, saved)
+    artifact = load_artifact(artifact_path)
+    if artifact.round != 1:
+        raise ClarificationInputError(
+            "This reassessment belongs to a follow-up batch; only one follow-up round is "
+            "supported. No call was made."
+        )
+    if saved.clarification_id != artifact.clarification_id:
+        raise ClarificationInputError(
+            "Reassessment and clarification artifact do not match (different "
+            "clarification_id). No call was made."
+        )
+    question_ids = [q.id for q in artifact.questions]
+    answered = [r.question_id for r in saved.recorded_responses]
+    if len(set(answered)) != len(answered) or not set(answered) <= set(question_ids):
+        raise ClarificationInputError(
+            "Reassessment's recorded responses do not match the batch's questions. "
+            "No call was made."
+        )
+    if set(answered) | set(saved.unanswered_question_ids) != set(question_ids) or (
+        set(answered) & set(saved.unanswered_question_ids)
+    ):
+        raise ClarificationInputError(
+            "Reassessment's answered and unanswered questions do not cover the batch exactly. "
+            "No call was made."
+        )
+    try:
+        recorded = [
+            ResponseEntry(question_id=r.question_id, status=r.status, answer=r.answer)
+            for r in saved.recorded_responses
+        ]
+    except pydantic.ValidationError as exc:
+        details = _describe_validation_error(exc)
+        raise ClarificationInputError(
+            f"Reassessment's recorded responses are invalid ({details}). No call was made."
+        ) from exc
+    responses = RecordedResponses(recorded, list(saved.unanswered_question_ids))
+    if _reassessment_reference_issues(saved.report, artifact, responses):
+        raise ClarificationInputError(
+            "Reassessment report cites findings or questions that do not resolve against its "
+            "batch. No call was made."
+        )
+    return FollowupSource(reassessment_path, saved, artifact_path, artifact, responses)
+
+
+def _followup_input(source: FollowupSource) -> str:
+    artifact = source.artifact
+    context = artifact.context()
+    assert source.reassessment.report is not None
+
+    def dump(value: object) -> str:
+        return json.dumps(value, indent=2, ensure_ascii=False)
+
+    questions = [
+        {**q.model_dump(), "perspectives": question_perspectives(q, context.sources)}
+        for q in artifact.questions
+    ]
+    return (
+        f"{_questions_input(context)}\n\n"
+        f"First-round clarification questions:\n{dump(questions)}\n\n"
+        "First-round recorded responses (reported by the user; not independently verified):\n"
+        f"{dump([_response_json(r) for r in source.responses.recorded])}\n\n"
+        "First-round questions without a response (unanswered):\n"
+        f"{dump(source.responses.unanswered)}\n\n"
+        "Latest reassessment (a model interpretation of the findings and responses, not user "
+        f"input):\n{dump(source.reassessment.report.model_dump())}"
+    )
+
+
+def _next_question_ids(existing: list[ClarificationQuestion], count: int) -> list[str]:
+    """IDs that continue after the existing ones ("q4", "q5", ...), never reusing one."""
+    taken = {q.id for q in existing}
+    ids: list[str] = []
+    n = len(existing) + 1
+    while len(ids) < count:
+        if f"q{n}" not in taken:
+            ids.append(f"q{n}")
+        n += 1
+    return ids
+
+
+async def prepare_followup(reassessment_path: Path) -> PreparedClarification:
+    """Generate one follow-up batch (round 2) of up to three questions.
+
+    Raises `ClarificationInputError` before any call, and before creating
+    anything, if the lineage or references are invalid or a third round is
+    attempted. Saves a new `clarify-*` directory next to the round-1 batch;
+    earlier files are never modified. A failed call is saved as a
+    `status: "failed"` artifact and returned.
+    """
+    source = load_followup_source(reassessment_path)
+    get_anthropic_api_key()
+    requested_model = get_anthropic_model()
+    prior = source.artifact
+    context = prior.context()
+    assert source.reassessment.report is not None
+
+    clarification_id, directory = create_run_dir(
+        "clarify-", runs_dir=source.artifact_path.parent.parent
+    )
+    generation: dict[str, Any] = {
+        "stage": "followup",
+        "requested_model": requested_model,
+        "system_prompt": FOLLOWUP_QUESTIONS_SYSTEM_PROMPT,
+        "max_output_tokens": QUESTIONS_MAX_OUTPUT_TOKENS,
+        "git": git_state(),
+    }
+    questions: list[ClarificationQuestion] = []
+    call: CallDiagnostics | None = None
+    error: ClarificationError | None = None
+    try:
+        batch, call = await _structured_call(
+            stage="followup_questions",
+            schema_name="question_batch",
+            system=FOLLOWUP_QUESTIONS_SYSTEM_PROMPT,
+            user_content=_followup_input(source),
+            output_schema=QuestionBatch,
+            max_tokens=QUESTIONS_MAX_OUTPUT_TOKENS,
+            check=lambda parsed: _question_reference_issues(parsed, context.sources),
+        )
+        ids = _next_question_ids(prior.questions, len(batch.questions))
+        questions = [
+            ClarificationQuestion(id=qid, **q.model_dump())
+            for qid, q in zip(ids, batch.questions, strict=True)
+        ]
+    except ClarificationError as exc:
+        error = exc
+        call = exc.call
+
+    generation.update(
+        status="failed" if error is not None else "success",
+        **_call_fields(call, error),
+        **_error_fields(error),
+    )
+    artifact = ClarificationArtifact(
+        clarification_id=clarification_id,
+        created_at=utc_now(),
+        status="failed" if error is not None else "success",
+        source_run=prior.source_run,
+        plan=prior.plan,
+        experts=prior.experts,
+        synthesis=prior.synthesis,
+        sources=prior.sources,
+        questions=questions,
+        question_generation=generation,
+        round=2,
+        previous=ClarificationLineage(
+            clarification_id=prior.clarification_id,
+            clarification_file=str(source.artifact_path),
+            reassessment_id=source.reassessment.reassessment_id,
+            reassessment_file=str(reassessment_path),
+        ),
+        prior_questions=prior.questions,
+        prior_responses=source.responses.recorded,
+        prior_unanswered_question_ids=source.responses.unanswered,
+        prior_reassessment=source.reassessment.report,
+    )
+    write_json(directory / ARTIFACT_FILENAME, artifact.to_json())
+    if error is None:
+        write_json(directory / TEMPLATE_FILENAME, _template(artifact, context.sources))
+    return PreparedClarification(directory, artifact, call, error)
 
 
 # --- CLI ---
@@ -815,23 +1196,48 @@ async def _run_prepare(run_dir: Path) -> int:
     except ClarificationInputError as exc:
         print(f"Error: {exc}", file=sys.stderr)
         return 1
+    return _report_prepared(prepared, "Question generation")
+
+
+async def _run_followup(reassessment_path: Path) -> int:
+    try:
+        prepared = await prepare_followup(reassessment_path)
+    except ClarificationInputError as exc:
+        print(f"Error: {exc}", file=sys.stderr)
+        return 1
+    previous = prepared.artifact.previous
+    if previous is not None:
+        print(
+            f"Follow-up round 2 for {previous.clarification_id} "
+            f"(reassessment {previous.reassessment_id})",
+            file=sys.stderr,
+        )
+    return _report_prepared(prepared, "Follow-up question generation")
+
+
+def _report_prepared(prepared: PreparedClarification, label: str) -> int:
     usage = prepared.call.usage if prepared.call else None
     if prepared.error is not None:
         _print_error(prepared.error)
-        _print_stage_usage("Question generation", usage)
+        _print_stage_usage(label, usage)
         print(f"Failure saved in: {prepared.directory / ARTIFACT_FILENAME}", file=sys.stderr)
         return 1
 
     sources = prepared.artifact.context().sources
     questions = prepared.artifact.questions
-    if not questions:
+    if not questions and prepared.artifact.round == 2:
+        print(
+            "No useful follow-up: the model found no open question whose answer could "
+            "materially change the conclusion. This is not evidence that the plan is risk-free."
+        )
+    elif not questions:
         print("No clarification questions: the model judged that clarification would not help.")
     for q in questions:
         print(f"{q.id} [{', '.join(question_perspectives(q, sources))}]")
         print(f"  {q.question}")
         print(f"  Why it matters: {q.why_it_matters}")
         print(f"  Based on: {', '.join(q.source_finding_ids)}")
-    _print_stage_usage("Question generation", usage)
+    _print_stage_usage(label, usage)
     print(f"Clarification saved in: {prepared.directory / ARTIFACT_FILENAME}", file=sys.stderr)
     print(f"Edit your responses in: {prepared.directory / TEMPLATE_FILENAME}", file=sys.stderr)
     return 0
@@ -866,7 +1272,7 @@ async def _run_reassess(artifact_path: Path, responses_path: Path) -> int:
 def _parse_args(argv: list[str] | None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         prog="blindspot.clarification",
-        description="One clarification round over a saved --auto-team run.",
+        description="Clarification over a saved --auto-team run (one round plus one follow-up).",
     )
     commands = parser.add_subparsers(dest="command", required=True)
     prep = commands.add_parser("prepare", help="Generate up to three clarification questions.")
@@ -874,6 +1280,12 @@ def _parse_args(argv: list[str] | None) -> argparse.Namespace:
     re = commands.add_parser("reassess", help="Reassess using a filled-in response file.")
     re.add_argument("--clarification", required=True, type=Path, help="clarification.json")
     re.add_argument("--responses", required=True, type=Path, help="Edited responses.json")
+    follow = commands.add_parser(
+        "followup", help="Generate one follow-up batch (round 2) from a successful reassessment."
+    )
+    follow.add_argument(
+        "--reassessment", required=True, type=Path, help="A round-1 reassessment-*.json"
+    )
     return parser.parse_args(argv)
 
 
@@ -881,6 +1293,8 @@ def main(argv: list[str] | None = None) -> int:
     args = _parse_args(argv)
     if args.command == "prepare":
         return asyncio.run(_run_prepare(args.run))
+    if args.command == "followup":
+        return asyncio.run(_run_followup(args.reassessment))
     return asyncio.run(_run_reassess(args.clarification, args.responses))
 
 

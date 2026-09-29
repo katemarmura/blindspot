@@ -125,6 +125,7 @@ FailureStage = Literal[
     "synthesis",
     "clarification_questions",
     "reassessment",
+    "followup_questions",
 ]
 
 # Why the bounded recovery was not attempted after an initial-stage failure.

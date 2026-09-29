@@ -48,6 +48,8 @@ Artifact formats:
 | | `result.json` | Final: `experts`, `sources`, `synthesis`, `total_usage`. |
 | Clarification | `runs/team-*/clarify-*/clarification.json` | Plan, experts, `sources`, `synthesis`, `questions`, `question_generation`. |
 | | `responses.json` | The user-edited responses (may change after a reassessment). |
+| Follow-up (round 2) | `runs/team-*/clarify-*/clarification.json` with `round: 2` | `previous` lineage (round-1 batch and reassessment), plus copies of `prior_questions`, `prior_responses`, `prior_unanswered_question_ids`, and `prior_reassessment`. `questions` holds only the new ones (`q4`…). The helper prints `FOLLOW-UP ROUND 2`. |
+| | its `reassessment-*.json` | `clarification_round: 2`. `recorded_responses` lists **both rounds**, each tagged with `round`; the response file holds only round 2. |
 | Evaluation copy | `runs/evals/clarify-*/` | A copy of a committed fixture from `evals/`: `clarification.json` with no question-generation call, several `responses-*.json`, and the reassessments made from them. Use that fixture's `CHECKLIST.md`. |
 | | `reassessment-*.json` | `recorded_responses` actually used, `unanswered_question_ids`, `report`, `diagnostics`, `usage`, `settings.max_output_tokens`, and `call_diagnostics` (newer files). |
 
@@ -66,7 +68,7 @@ Pass, Fail, or Unclear with a short quote. Record the prompt revision (`settings
 - **Stages:** state each as completed, failed, skipped/no-call (for example synthesis `no_findings`, a reassessment with nothing new), unavailable (for example synthesis after all experts failed), or not reached. A partial expert failure stays a failure even when synthesis succeeded.
 - **Usage:**
   - Report calls, input/output tokens, and elapsed time where saved.
-  - Keep the original investigation (`result.json` → `total_usage`) **separate** from clarification attempts (question generation plus each reassessment file). Each clarification file records only its own call.
+  - Keep the original investigation (`result.json` → `total_usage`) **separate** from clarification attempts (question generation, follow-up generation, and each reassessment file). Each clarification file records only its own call; a round-2 artifact's copied round-1 data carries no usage and must not be counted again.
   - Never add a stage twice. `total_usage` already includes team selection, experts (with recovery), and synthesis.
   - Mark incomplete or missing usage as such; never treat it as zero.
 - **Diagnostics:** report stop reasons and validation issue types.

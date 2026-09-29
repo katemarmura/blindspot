@@ -38,5 +38,12 @@ Acceptable:
 
 Bundled (fail):
 - "Are the users in your auth service, and what data will the portal store?"
+- "Will the portal handle personal data, and if so, which requirements apply?" (a conditional
+  follow-up; the focused form is "Will the portal store or display customers' personal
+  data?")
+- "Are users already in the authentication service, or will migration or a new sign-up flow
+  be needed?" (overextended: current state plus the resulting solution; the focused form is
+  "Are the client's end users already registered in the existing authentication
+  service?")
 - "Has the client agreed acceptance criteria and a change-request process?"
 - A `why_it_matters` of "…; also let us know whether the client has a security policy"

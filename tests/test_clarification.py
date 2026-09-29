@@ -467,7 +467,7 @@ def test_prepare_success_saves_artifact_and_template(
     # One call with the original plan, successful findings, missing coverage, and synthesis.
     (call,) = fake.calls
     assert call["system"] == CLARIFICATION_QUESTIONS_SYSTEM_PROMPT
-    assert call["max_tokens"] == 1500
+    assert call["max_tokens"] == 15000
     content = call["messages"][0]["content"]
     experts = [ExpertInput(p, a, r) for p, (a, r) in enumerate(_TEAM, start=1)]
     assert content.startswith(build_input(_PLAN, experts))
@@ -1051,7 +1051,7 @@ def test_successful_question_call_records_diagnostics(
     assert generation["elapsed_seconds"] == 1.25
     assert generation["call_diagnostics"] == {
         "requested_model": _MODEL,
-        "max_output_tokens": 1500,
+        "max_output_tokens": 15000,
         "elapsed_seconds": 1.25,
         "response_received": True,
         "returned_model": f"{_MODEL}-20260101",
@@ -1265,4 +1265,4 @@ def test_failed_question_call_records_elapsed_and_usage(
     assert generation["usage"]["input_tokens"] == 800
     assert generation["call_diagnostics"]["stop_reason"] == "max_tokens"
     assert generation["call_diagnostics"]["parse_text_is_valid_json"] is False
-    assert generation["call_diagnostics"]["max_output_tokens"] == 1500
+    assert generation["call_diagnostics"]["max_output_tokens"] == 15000

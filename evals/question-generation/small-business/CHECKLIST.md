@@ -39,6 +39,10 @@ Acceptable:
 - "What opening days and hours are you planning?"
 
 Bundled or out of scope (fail):
+- "Is the storefront already fitted with commercial baking equipment, and if not, what will
+  you buy?" (a conditional follow-up; ask only whether it's fitted)
+- "Will two part-time staff cover your opening hours, or will you hire more?" (current
+  state plus solution; ask about the planned hours or cover on its own)
 - "How much have you saved, what is the rent, and what revenue do you expect?"
 - "Does the lease allow alterations, and is the storefront already equipped?"
 - "Have you obtained the necessary food licences?" (no supporting finding, since the legal

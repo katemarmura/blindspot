@@ -1,0 +1,181 @@
+{
+  "clarification_id": "eval-kitten-before-holiday",
+  "created_at": "2026-09-28T00:00:00+00:00",
+  "status": "success",
+  "source_run": {
+    "directory": "(fictional evaluation fixture)",
+    "run_id": "eval-kitten-before-holiday"
+  },
+  "plan": "FICTIONAL EVALUATION FIXTURE. I have an eight-year-old cat who has always lived alone and I want to adopt a kitten. I live in a one-bedroom apartment and work from home. I can afford routine care for both cats. I plan to adopt the kitten two weeks before a ten-day holiday, during which a friend will visit once a day.",
+  "experts": [
+    {
+      "position": 1,
+      "assignment": {
+        "perspective": "Human & Behavioral",
+        "objective": "How introducing a kitten to a solitary adult cat interacts with the short window before departure.",
+        "questions": [
+          "How far along is the introduction likely to be by departure?"
+        ]
+      },
+      "report": {
+        "findings": [
+          {
+            "title": "Introduction may still be in progress at departure",
+            "observation": "If the introduction is still at an early stage after two weeks, the cats would be left mostly unsupervised before their relationship has stabilized.",
+            "why_it_matters": "Unsupervised conflict or stress is harder to prevent or notice during the trip.",
+            "assumptions": [
+              "The introduction will not be complete within two weeks"
+            ],
+            "question_to_check": "How settled do you expect the cats to be by the day you leave?"
+          },
+          {
+            "title": "Separation fallback depends on unstated space",
+            "observation": "If the cats need to be kept apart during the trip, a one-bedroom apartment may or may not offer a closable space with separate resources; the plan does not say.",
+            "why_it_matters": "Without a workable separation option, there is no fallback if the cats are not ready to share space.",
+            "assumptions": [
+              "The apartment has limited closable spaces",
+              "The introduction may not be complete by departure"
+            ],
+            "question_to_check": "What space could you use to keep the cats apart while you are away?"
+          }
+        ]
+      }
+    },
+    {
+      "position": 2,
+      "assignment": {
+        "perspective": "Operations & Logistics",
+        "objective": "Whether one daily visit covers the care of two cats, one newly adopted, for ten days.",
+        "questions": [
+          "What does the daily visit need to cover?"
+        ]
+      },
+      "report": {
+        "findings": [
+          {
+            "title": "Once-daily visit may undercount kitten care",
+            "observation": "Depending on its age, a kitten may need more frequent feeding and monitoring than one daily visit provides.",
+            "why_it_matters": "Care sized for one adult cat may not cover a young kitten's needs.",
+            "assumptions": [
+              "The kitten is young enough that its care needs differ from an adult cat's"
+            ],
+            "question_to_check": "How old will the kitten be when you leave, and what care will it need each day?"
+          },
+          {
+            "title": "No stated plan for problems between visits",
+            "observation": "The plan does not describe how a problem arising between visits (illness, injury, conflict) would be noticed or handled.",
+            "why_it_matters": "A problem could go unaddressed for up to a day.",
+            "assumptions": [
+              "No remote monitoring is planned",
+              "The friend is not present beyond the daily visit"
+            ],
+            "question_to_check": "What should happen if a problem starts between visits?"
+          }
+        ]
+      }
+    },
+    {
+      "position": 3,
+      "assignment": {
+        "perspective": "Health & Safety",
+        "objective": "Health considerations of introducing a kitten shortly before reduced supervision.",
+        "questions": [
+          "Where is the kitten in its health schedule?"
+        ]
+      },
+      "report": {
+        "findings": [
+          {
+            "title": "Vaccination schedule versus departure date",
+            "observation": "If the kitten's vaccinations are incomplete, a follow-up dose could fall due while you are away, depending on the dates involved.",
+            "why_it_matters": "A missed or delayed dose, or illness while only a visitor is present, would be harder to manage.",
+            "assumptions": [
+              "The kitten's vaccination schedule is not complete at adoption"
+            ],
+            "question_to_check": "When are the kitten's next vaccinations due relative to your trip?"
+          },
+          {
+            "title": "Visitor's ability to respond to emergencies",
+            "observation": "A once-daily visitor may not recognize a developing problem or know what they are allowed to do about it.",
+            "why_it_matters": "A fast-developing problem could worsen before anyone acts.",
+            "assumptions": [
+              "The friend has not been given monitoring guidance or authority to act"
+            ],
+            "question_to_check": "What has your friend been told to watch for, and what may they decide on your behalf?"
+          }
+        ]
+      }
+    }
+  ],
+  "synthesis": null,
+  "sources": {
+    "e1-f1": {
+      "expert_position": 1,
+      "perspective": "Human & Behavioral",
+      "finding_position": 1,
+      "title": "Introduction may still be in progress at departure"
+    },
+    "e1-f2": {
+      "expert_position": 1,
+      "perspective": "Human & Behavioral",
+      "finding_position": 2,
+      "title": "Separation fallback depends on unstated space"
+    },
+    "e2-f1": {
+      "expert_position": 2,
+      "perspective": "Operations & Logistics",
+      "finding_position": 1,
+      "title": "Once-daily visit may undercount kitten care"
+    },
+    "e2-f2": {
+      "expert_position": 2,
+      "perspective": "Operations & Logistics",
+      "finding_position": 2,
+      "title": "No stated plan for problems between visits"
+    },
+    "e3-f1": {
+      "expert_position": 3,
+      "perspective": "Health & Safety",
+      "finding_position": 1,
+      "title": "Vaccination schedule versus departure date"
+    },
+    "e3-f2": {
+      "expert_position": 3,
+      "perspective": "Health & Safety",
+      "finding_position": 2,
+      "title": "Visitor's ability to respond to emergencies"
+    }
+  },
+  "questions": [
+    {
+      "question": "How old is the kitten, and which vaccinations has it had?",
+      "why_it_matters": "The answer affects how much daily care the kitten needs and whether health follow-up could fall during the trip.",
+      "source_finding_ids": [
+        "e2-f1",
+        "e3-f1"
+      ],
+      "id": "q1"
+    },
+    {
+      "question": "If the cats are not comfortable together by departure, what space would you use to keep them apart?",
+      "why_it_matters": "A workable separation setup is the fallback if the introduction is not complete.",
+      "source_finding_ids": [
+        "e1-f1",
+        "e1-f2"
+      ],
+      "id": "q2"
+    },
+    {
+      "question": "What has your friend been told to watch for, and what are they allowed to decide about the cats' care?",
+      "why_it_matters": "This determines whether problems would be noticed and acted on during the once-daily visits.",
+      "source_finding_ids": [
+        "e2-f2",
+        "e3-f2"
+      ],
+      "id": "q3"
+    }
+  ],
+  "question_generation": {
+    "note": "Fictional evaluation fixture written by hand; no model call was made."
+  }
+}

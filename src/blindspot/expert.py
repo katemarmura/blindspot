@@ -29,6 +29,7 @@ from blindspot.config import get_anthropic_api_key, get_anthropic_model
 from blindspot.prompts import EXPERT_SYSTEM_PROMPT, SELECTION_SYSTEM_PROMPT
 from blindspot.schemas import (
     AddressedConcern,
+    ConclusionInsight,
     ExpertDefinition,
     ExpertReport,
     Finding,
@@ -222,6 +223,7 @@ _KNOWN_FIELDS = frozenset(
         *QuestionBatch.model_fields,
         *ProposedQuestion.model_fields,
         *ReassessmentReport.model_fields,
+        *ConclusionInsight.model_fields,
         *RemainingConsideration.model_fields,
         *AddressedConcern.model_fields,
         *UnresolvedUncertainty.model_fields,

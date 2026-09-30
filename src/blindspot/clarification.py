@@ -68,13 +68,16 @@ from blindspot.prompts import (
 from blindspot.runs import create_run_dir, git_state, utc_now, write_json
 from blindspot.schemas import (
     ClarificationQuestion,
+    ConclusionInsight,
     ExpertDefinition,
     ExpertReport,
     QuestionBatch,
     ReassessmentReport,
+    ReassessmentSections,
     ResponseEntry,
     ResponseFile,
     ResponseStatus,
+    SavedReassessmentReport,
     SynthesisReport,
 )
 from blindspot.synthesis import ExpertInput, SourceRef, build_input, source_map
@@ -481,7 +484,7 @@ class ClarificationArtifact(BaseModel):
     prior_questions: list[ClarificationQuestion] = Field(default_factory=list)
     prior_responses: list[ResponseEntry] = Field(default_factory=list)
     prior_unanswered_question_ids: list[str] = Field(default_factory=list)
-    prior_reassessment: ReassessmentReport | None = None
+    prior_reassessment: SavedReassessmentReport | None = None
 
     @model_validator(mode="after")
     def _check_unique_question_ids(self) -> "ClarificationArtifact":
@@ -795,7 +798,7 @@ def _reassessment_input(artifact: ClarificationArtifact, responses: RecordedResp
 
 
 def _reassessment_reference_issues(
-    report: ReassessmentReport, artifact: ClarificationArtifact, responses: RecordedResponses
+    report: ReassessmentSections, artifact: ClarificationArtifact, responses: RecordedResponses
 ) -> tuple[ValidationIssue, ...]:
     sources = artifact.context().sources
     question_ids = {q.id for q in artifact.all_questions}
@@ -833,6 +836,22 @@ class Reassessment:
     call: CallDiagnostics | None
     error: ClarificationError | None
     responses: RecordedResponses
+    # The batch's round, and (round 2) the round-1 reassessment it follows.
+    round: int = 1
+    previous_reassessment_file: str | None = None
+
+
+def _round_info(artifact: ClarificationArtifact) -> tuple[int, str | None]:
+    previous = artifact.previous.reassessment_file if artifact.previous is not None else None
+    return artifact.round, previous
+
+
+def _conclusion_status(artifact: ClarificationArtifact, error: ClarificationError | None) -> Any:
+    """What a successful reassessment represents: the current assessment after round 1, or
+    the conclusion of this bounded review after round 2. None when the call failed."""
+    if error is not None:
+        return None
+    return "current_assessment" if artifact.round == 1 else "review_conclusion"
 
 
 async def reassess(artifact_path: Path, responses_path: Path) -> Reassessment:
@@ -844,7 +863,7 @@ async def reassess(artifact_path: Path, responses_path: Path) -> Reassessment:
     artifact = load_artifact(artifact_path)
     responses = load_responses(responses_path, artifact)
     if not responses.has_new_context:
-        return Reassessment(None, None, None, None, responses)
+        return Reassessment(None, None, None, None, responses, *_round_info(artifact))
     get_anthropic_api_key()
     requested_model = get_anthropic_model()
 
@@ -894,6 +913,7 @@ async def reassess(artifact_path: Path, responses_path: Path) -> Reassessment:
             "clarification_file": str(artifact_path),
             "responses_file": str(responses_path),
             "status": "failed" if error is not None else "success",
+            "conclusion_status": _conclusion_status(artifact, error),
             **round_fields,
             "report": report.model_dump() if report is not None else None,
             "requested_model": requested_model,
@@ -906,7 +926,7 @@ async def reassess(artifact_path: Path, responses_path: Path) -> Reassessment:
             },
         },
     )
-    return Reassessment(path, report, call, error, responses)
+    return Reassessment(path, report, call, error, responses, *_round_info(artifact))
 
 
 # --- Follow-up round (round 2) ---
@@ -934,7 +954,8 @@ class _SavedReassessment(BaseModel):
     status: Literal["success", "failed"]
     recorded_responses: list[_SavedResponse]
     unanswered_question_ids: list[str]
-    report: ReassessmentReport | None = None
+    # Older reports have no takeaway; they still load and can start a follow-up.
+    report: SavedReassessmentReport | None = None
 
 
 @dataclass(frozen=True)
@@ -1115,6 +1136,11 @@ async def prepare_followup(reassessment_path: Path) -> PreparedClarification:
         **_call_fields(call, error),
         **_error_fields(error),
     )
+    if error is None and not questions:
+        # No useful follow-up: the preceding reassessment is the conclusion available for
+        # this session. No other call is made and that file is not rewritten.
+        generation["no_useful_followup"] = True
+        generation["conclusion_reassessment_file"] = str(reassessment_path)
     artifact = ClarificationArtifact(
         clarification_id=clarification_id,
         created_at=utc_now(),
@@ -1215,6 +1241,48 @@ async def _run_followup(reassessment_path: Path) -> int:
     return _report_prepared(prepared, "Follow-up question generation")
 
 
+def render_conclusion(report: ReassessmentReport | SavedReassessmentReport) -> str:
+    """Render fields without another model call; keep legacy prose readable."""
+    insight = report.takeaway
+    lines: list[str] = []
+    if isinstance(insight, ConclusionInsight):
+        lines = [
+            f"Blind spot: {insight.blind_spot}",
+            f"Why it mattered: {insight.why_it_mattered}",
+            f"Status: {insight.status.replace('_', ' ').capitalize()}. "
+            f"{insight.status_explanation}",
+        ]
+    elif isinstance(insight, str):
+        return f"Legacy takeaway: {insight}"
+    elif isinstance(report, SavedReassessmentReport):
+        lines.append("No takeaway was recorded; read the detailed sections.")
+    if not report.remaining_considerations and not report.unresolved_uncertainties:
+        lines.append(
+            "Based on your answers, no additional open concerns remain among those examined."
+        )
+    return "\n".join(lines)
+
+
+def _print_available_conclusion(artifact: ClarificationArtifact) -> None:
+    """Point to the preceding reassessment as the session's available conclusion."""
+    previous = artifact.previous
+    report = artifact.prior_reassessment
+    if previous is None or report is None:
+        return
+    print("The conclusion available for this session is the preceding reassessment:")
+    print(f"  {previous.reassessment_file}")
+    print(render_conclusion(report))
+    open_items = len(report.remaining_considerations) + len(report.unresolved_uncertainties)
+    if open_items:
+        print(
+            f"  It still lists {len(report.remaining_considerations)} remaining "
+            f"consideration(s) and {len(report.unresolved_uncertainties)} unresolved "
+            "uncertainty(ies); stopping here does not resolve them."
+        )
+    else:
+        print("  It lists no remaining considerations or unresolved uncertainties.")
+
+
 def _report_prepared(prepared: PreparedClarification, label: str) -> int:
     usage = prepared.call.usage if prepared.call else None
     if prepared.error is not None:
@@ -1230,6 +1298,7 @@ def _report_prepared(prepared: PreparedClarification, label: str) -> int:
             "No useful follow-up: the model found no open question whose answer could "
             "materially change the conclusion. This is not evidence that the plan is risk-free."
         )
+        _print_available_conclusion(prepared.artifact)
     elif not questions:
         print("No clarification questions: the model judged that clarification would not help.")
     for q in questions:
@@ -1252,20 +1321,38 @@ async def _run_reassess(artifact_path: Path, responses_path: Path) -> int:
     if result.path is None:
         print(
             "No new context to reassess: every question is unanswered or deferred. "
-            "No call was made and nothing was saved.",
+            "No call was made and nothing was saved, so there is no new assessment.",
             file=sys.stderr,
         )
+        if result.previous_reassessment_file is not None:
+            print(
+                f"The latest assessment is still: {result.previous_reassessment_file}",
+                file=sys.stderr,
+            )
         return 0
     usage = result.call.usage if result.call else None
     if result.error is not None:
         _print_error(result.error)
         _print_stage_usage("Reassessment", usage)
         print(f"Failure saved in: {result.path}", file=sys.stderr)
+        print("No new assessment was produced.", file=sys.stderr)
         return 1
     assert result.report is not None
     print(json.dumps(result.report.model_dump(), indent=2, ensure_ascii=False))
     _print_stage_usage("Reassessment", usage)
     print(f"Reassessment saved in: {result.path}", file=sys.stderr)
+    if result.round == 1:
+        print(f"Current assessment (round 1): {render_conclusion(result.report)}", file=sys.stderr)
+        print(
+            "One follow-up round is available: uv run python -m blindspot.clarification "
+            f"followup --reassessment {result.path}",
+            file=sys.stderr,
+        )
+    else:
+        print(
+            f"Conclusion of this review (round 2): {render_conclusion(result.report)}",
+            file=sys.stderr,
+        )
     return 0
 
 

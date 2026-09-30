@@ -259,7 +259,12 @@ class AddressedConcern(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    summary: str
+    summary: str = Field(
+        description=(
+            "The specific gap and decisive reported fact or change that addressed it. "
+            "Keep necessary conditions; omit inventories of people's arrangements."
+        )
+    )
     source_finding_ids: list[str] = Field(min_length=1)
     question_ids: list[str] = Field(min_length=1)
 
@@ -310,11 +315,61 @@ class UnresolvedUncertainty(BaseModel):
         return self
 
 
-class ReassessmentReport(BaseModel):
-    """The reassessment call's output. References are validated in Python."""
+class ReassessmentSections(BaseModel):
+    """The three detailed reassessment sections. References are validated in Python."""
 
     model_config = ConfigDict(extra="forbid")
 
     remaining_considerations: list[RemainingConsideration] = Field(min_length=0, max_length=5)
     addressed_concerns: list[AddressedConcern] = Field(min_length=0, max_length=5)
     unresolved_uncertainties: list[UnresolvedUncertainty] = Field(min_length=0, max_length=5)
+
+
+class ConclusionInsight(BaseModel):
+    """One prioritized insight, not a free-form recap of every answer."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    blind_spot: str = Field(
+        description="One key gap or dependency examined in the detailed sections."
+    )
+    why_it_mattered: str = Field(description="Its consequence for this plan, without new claims.")
+    status: Literal["open", "partly_addressed", "addressed"]
+    status_explanation: str = Field(
+        description="The decisive reported change or remaining gap; omit supporting inventories."
+    )
+
+    @field_validator("blind_spot", "why_it_mattered", "status_explanation")
+    @classmethod
+    def _nonblank(cls, value: str) -> str:
+        return _require_nonblank(value)
+
+
+class ReassessmentReport(ReassessmentSections):
+    """New model output requires a structured takeaway, or null for an empty report."""
+
+    takeaway: ConclusionInsight | None
+
+    @model_validator(mode="after")
+    def _check_takeaway_presence(self) -> "ReassessmentReport":
+        has_sections = bool(
+            self.remaining_considerations
+            or self.addressed_concerns
+            or self.unresolved_uncertainties
+        )
+        if has_sections != (self.takeaway is not None):
+            raise ValueError("takeaway must be present exactly when the report has detailed items")
+        return self
+
+
+class SavedReassessmentReport(ReassessmentSections):
+    """Saved reports may have a structured, legacy text, or absent takeaway."""
+
+    takeaway: ConclusionInsight | str | None = None
+
+    @field_validator("takeaway")
+    @classmethod
+    def _check_takeaway(
+        cls, value: ConclusionInsight | str | None
+    ) -> ConclusionInsight | str | None:
+        return _require_nonblank(value) if isinstance(value, str) else value

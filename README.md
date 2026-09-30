@@ -306,6 +306,27 @@ section has one job:
 - **Addressed concerns:** what an answer specifically improved. Learning a fact isn't enough.
 - **Unresolved uncertainties:** a specific missing fact, and the decision it would change.
 
+Each new report has a structured **takeaway** with `blind_spot`, `why_it_mattered`,
+`status` (`open`, `partly_addressed`, or `addressed`), and `status_explanation`. It focuses
+on one prioritized insight. The CLI displays those fields with labels and adds a fixed,
+bounded closing sentence only when no remaining considerations or uncertainties exist.
+For an entirely empty report, the model returns `takeaway: null` rather than inventing an
+insight. The same reassessment call generates everything; no extra summarization call runs.
+
+Older saved reports with a prose takeaway or no takeaway remain readable. Their prose is
+labelled as legacy, not converted into invented structured content. New model responses
+must use the structured format; reassessment stdout remains JSON.
+
+- **After round 1**, the CLI prints it on stderr as the *current assessment*, with the
+  command for the optional follow-up.
+- **After round 2**, it's the *conclusion of this review*.
+- **If the follow-up finds no useful question**, the CLI names the preceding reassessment
+  as the conclusion available and says whether concerns remain. No extra call is made.
+- **A failed call, or nothing new to reassess**, announces no new assessment.
+
+Saved files gain `conclusion_status` (`current_assessment`, `review_conclusion`, or `null`).
+Older reports still load and can start a follow-up. Stdout stays the report JSON, now with `takeaway`.
+
 The prompt tells the model:
 
 - to accept a concrete arrangement you report as answering the gap it covers, rather than

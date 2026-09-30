@@ -76,6 +76,24 @@ def _call_diag(c: Any) -> str:
     )
 
 
+def _takeaway_state(data: dict[str, Any]) -> str:
+    """Takeaway presence (never its text) and the saved lifecycle label, if any."""
+    report = data.get("report")
+    if not isinstance(report, dict):
+        return "no report (no takeaway, not a conclusion)"
+    takeaway = report.get("takeaway")
+    if isinstance(takeaway, dict):
+        state = f"structured takeaway present (status={takeaway.get('status')})"
+    elif isinstance(takeaway, str) and takeaway.strip():
+        state = f"takeaway present ({len(takeaway)} chars; legacy text)"
+    elif "takeaway" in report and takeaway is None:
+        state = "no takeaway insight recorded (null); inspect sections"
+    else:
+        state = "no takeaway (legacy report, saved before takeaways)"
+    status = data.get("conclusion_status", "unrecorded (legacy)")
+    return f"{state}; conclusion_status={status}"
+
+
 def _derived_sources(experts: list[Any]) -> set[str]:
     """Source IDs as the application derives them: e<team pos>-f<finding pos>, successes only."""
     ids: set[str] = set()
@@ -216,6 +234,11 @@ def summarize_clarification(directory: Path) -> None:
         print(f"      {_call_diag(generation.get('call_diagnostics'))}")
     else:
         print("    question generation: no call recorded (e.g. a hand-written fixture)")
+    if generation.get("no_useful_followup"):
+        print(
+            "    no useful follow-up: the conclusion available is the preceding reassessment "
+            f"{generation.get('conclusion_reassessment_file')}"
+        )
     known_sources = _derived_sources(
         [{"report": e.get("report")} for e in artifact.get("experts") or []]
     )
@@ -284,6 +307,7 @@ def summarize_reassessment(
         f"      used responses ({responses_name}): {statuses}, "
         f"unanswered: {data.get('unanswered_question_ids')}"
     )
+    print(f"      {_takeaway_state(data)}")
     round_number = data.get("clarification_round", 1)
     if round_number != 1:
         print(f"      round {round_number}: used responses from every round (tagged by round)")

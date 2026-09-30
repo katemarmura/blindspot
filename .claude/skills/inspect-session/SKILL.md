@@ -98,6 +98,13 @@ both reassessments, and the round-2 artifact's `questions`. Assess:
 - **Stopping is justified.** Empty remaining and unresolved sections, or a zero-question
   follow-up, are fine when the supplied answers cover the concerns. That's not a claim
   that the plan is risk-free.
+- **Takeaway and lifecycle.** A new report's `takeaway` must agree with its sections and add
+  nothing new. `conclusion_status` should be `current_assessment` after round 1 and
+  `review_conclusion` after round 2.
+  - After a zero-question follow-up, the preceding reassessment is the conclusion available
+    (the helper names it). "No useful follow-up" is not "no remaining concerns".
+  - A failed call, or a round with nothing new to reassess, is never a new conclusion.
+  - Legacy reports have no takeaway; review their sections instead.
 
 Support each judgment with a short quote plus question and finding IDs and the file path.
 If a fixture checklist applies (for example `evals/followup/*/CHECKLIST.md`, or
@@ -119,3 +126,13 @@ Keep it concise:
 
 No percentages or numeric scores. Empty sections are fine. One session shows what
 happened here, not consistent model behaviour.
+
+### Structured conclusions
+
+New `report.takeaway` values are objects with `blind_spot`, `why_it_mattered`, `status`
+(open, partly_addressed, addressed), and `status_explanation`. Review them as one prioritized
+insight: do the fields concern the same gap, preserve facts and roles, and agree with the
+report sections? A structured format is not proof of semantic correctness. Null is valid
+for an empty new report. Older reports can have prose or no takeaway; do not invent a
+conversion or treat that format difference as a quality regression. The application renders
+labels and adds its bounded closing sentence only when no concerns or uncertainties remain.

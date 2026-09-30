@@ -343,6 +343,12 @@ def test_invalid_reassessment_report_is_rejected(data: dict[str, Any]) -> None:
         "remaining_considerations": [],
         "addressed_concerns": [],
         "unresolved_uncertainties": [],
+        "takeaway": {
+            "blind_spot": "A valid takeaway.",
+            "why_it_mattered": "It affects the plan.",
+            "status": "open",
+            "status_explanation": "A decision is still needed.",
+        },
         **data,
     }
     with pytest.raises(pydantic.ValidationError):
@@ -618,7 +624,7 @@ def _reassess_cli(artifact: Path, responses: Path) -> int:
     )
 
 
-_REPORT = {
+_REPORT: dict[str, Any] = {
     "remaining_considerations": [
         {
             "title": "Legal permits",
@@ -642,6 +648,12 @@ _REPORT = {
             "question_ids": ["q2"],
         }
     ],
+    "takeaway": {
+        "blind_spot": "Permit timing is the main open question; supplier terms remain unknown.",
+        "why_it_mattered": "It affects the plan.",
+        "status": "open",
+        "status_explanation": "A decision is still needed.",
+    },
 }
 
 

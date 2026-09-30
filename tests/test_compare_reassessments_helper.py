@@ -311,3 +311,17 @@ def test_helper_is_read_only(tmp_path: Path) -> None:
     before = digest()
     helper.main(["--batch", str(batch)])
     assert digest() == before
+
+
+def test_takeaway_state_is_shown_for_both_sides(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    new = {**_REPORT, "takeaway": "The main open point is e1-f2."}
+    batch = _batch(tmp_path, _reassessment(), _reassessment(report=new))
+
+    helper.main(["--batch", str(batch), "--no-prompt-diff"])
+
+    out = capsys.readouterr().out
+    assert "Takeaway: A no takeaway (legacy report" in out
+    assert "| B takeaway present (29 chars; legacy text)" in out
+    assert "The main open point" not in out

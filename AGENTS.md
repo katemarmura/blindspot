@@ -252,6 +252,28 @@ What exists:
     - a source ID doesn't justify a stricter concern;
     - empty sections are valid.
 
+    Its report shape is the three sections plus a required `takeaway` field:
+    `ConclusionInsight` (`blind_spot`, `why_it_mattered`, `status`, `status_explanation`),
+    or null only when all sections are empty. Text fields are nonblank and extra fields
+    are forbidden. Status is open, partly_addressed, or addressed. The insight prioritizes
+    one gap; its semantic accuracy still requires manual evaluation.
+    - Saved reports use `SavedReassessmentReport`, which accepts a structured insight,
+      legacy prose, or a missing takeaway. No conversion or rewriting of saved runs occurs.
+    - `render_conclusion` displays labelled fields and adds the bounded closing sentence
+      only when no remaining considerations or unresolved uncertainties exist. Legacy
+      prose stays labelled as legacy. This uses no model call.
+    - **Reassessment files** gain `conclusion_status`: `current_assessment` (round 1),
+      `review_conclusion` (round 2), or `null` on failure.
+    - **CLI messages:** `reassess` completion messages go to stderr, with stdout staying
+      the report JSON. `followup` prints questions and its zero-question conclusion message
+      to stdout; usage and saved-file paths go to stderr.
+      - The takeaway is labelled as the current assessment or the review conclusion.
+      - After a zero-question follow-up, the preceding reassessment is named as the
+        available conclusion (with an open-concerns note), and the generation metadata
+        records `no_useful_followup` and `conclusion_reassessment_file`. No extra call is
+        made and nothing is rewritten.
+      - A failure, or nothing new to reassess, announces no new assessment.
+
     Its attribution rules: keep each action, instruction, permission, and availability with
     the person it belongs to, and never transfer them to someone else. When an item
     summarizes several people's arrangements, name the person whenever it changes, so a

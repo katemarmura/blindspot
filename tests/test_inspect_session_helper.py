@@ -337,3 +337,49 @@ def test_helper_is_read_only(tmp_path: Path, capsys: pytest.CaptureFixture[str])
     assert helper.main([str(paths["c"])]) == 0
     assert digest() == before
     assert "Session artifacts" in capsys.readouterr().out
+
+
+# --- Takeaway and conclusion lifecycle ---
+
+
+def test_takeaway_state_reports_legacy_and_new_reports(tmp_path: Path) -> None:
+    paths = _session(tmp_path)
+
+    # The round-2 reassessment is in the new format; round 1 stays legacy.
+    def add_takeaway(d: dict[str, Any]) -> None:
+        d["report"]["takeaway"] = "The answers address the runway concern."
+        d["conclusion_status"] = "review_conclusion"
+
+    _edit(paths["c"], add_takeaway)
+
+    out = _review(paths["c"])
+
+    assert (
+        "no takeaway (legacy report, saved before takeaways); conclusion_status=unrecorded" in out
+    )
+    assert "takeaway present (39 chars; legacy text); conclusion_status=review_conclusion" in out
+    assert "The answers address the runway concern." not in out  # prose is never printed
+
+
+def test_zero_followup_points_to_the_available_conclusion(tmp_path: Path) -> None:
+    paths = _session(tmp_path, r2_questions=[])
+    _edit(
+        paths["r2_artifact"],
+        lambda d: d["question_generation"].update(
+            no_useful_followup=True, conclusion_reassessment_file=str(paths["a"])
+        ),
+    )
+
+    out = _review(paths["r2_artifact"])
+
+    assert f"the conclusion available is the preceding reassessment {paths['a']}" in out
+    assert "(not a new conclusion)" in out
+
+
+def test_failed_reassessment_is_not_a_conclusion(tmp_path: Path) -> None:
+    paths = _session(tmp_path)
+    _edit(paths["c"], lambda d: d.update(status="failed", report=None, conclusion_status=None))
+
+    out = _review(paths["c"])
+
+    assert "no report (no takeaway, not a conclusion)" in out

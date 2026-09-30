@@ -31,6 +31,7 @@ from summarize_run import (  # noqa: E402
     _load,
     _normalized,
     _secs,
+    _takeaway_state,
     _unresolved,
     _usage,
 )
@@ -204,11 +205,17 @@ def _generation_line(label: str, artifact: dict[str, Any] | None) -> str:
     outcome = artifact.get("status")
     if outcome == "success" and count == 0:
         outcome = "success, zero questions (no useful follow-up / no questions)"
-    return (
+    line = (
         f"  {label}: {outcome} ({count} questions) model={g.get('model')} "
         f"{_secs(g.get('elapsed_seconds'))} {_usage(g.get('usage'))}{_diag(g.get('diagnostics'))}"
         f"\n      {_call_diag(g.get('call_diagnostics'))}"
     )
+    if g.get("no_useful_followup"):
+        line += (
+            "\n      no useful follow-up: the conclusion available is the preceding "
+            f"reassessment {g.get('conclusion_reassessment_file')} (not a new conclusion)"
+        )
+    return line
 
 
 def _reassessment_line(label: str, path: Path | None, data: dict[str, Any] | None) -> str:
@@ -221,6 +228,7 @@ def _reassessment_line(label: str, path: Path | None, data: dict[str, Any] | Non
         f"  {label}: {path.name}: {data.get('status')} model={data.get('model')} "
         f"{_secs(data.get('elapsed_seconds'))} {_usage(data.get('usage'))}"
         f"{_diag(data.get('diagnostics'))}\n      {_call_diag(data.get('call_diagnostics'))}"
+        f"\n      {_takeaway_state(data)}"
     )
 
 

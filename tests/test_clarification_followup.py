@@ -152,6 +152,12 @@ _ROUND_1_REPORT = {
     "unresolved_uncertainties": [
         {"summary": "Hours", "source_finding_ids": ["e2-f1"], "question_ids": ["q3"]}
     ],
+    "takeaway": {
+        "blind_spot": "Equipment remains the main open decision; opening hours are unknown.",
+        "why_it_mattered": "It affects the plan.",
+        "status": "open",
+        "status_explanation": "A decision is still needed.",
+    },
 }
 _FOLLOWUP_BATCH = {"questions": [_q(["e1-f2"], "Fitted"), _q(["e2-f1"], "Opening days")]}
 
@@ -483,6 +489,12 @@ def test_round_2_reassessment_uses_accumulated_answers(tmp_path: Path, fake: _Fa
         "unresolved_uncertainties": [
             {"summary": "Hours", "source_finding_ids": ["e2-f1"], "question_ids": ["q3", "q5"]}
         ],
+        "takeaway": {
+            "blind_spot": "Opening hours remain open.",
+            "why_it_mattered": "It affects the plan.",
+            "status": "open",
+            "status_explanation": "A decision is still needed.",
+        },
     }
     fake.outcomes.append(_message(json.dumps(report)))
 
@@ -555,6 +567,12 @@ def test_round_2_addressed_concern_cannot_cite_a_prior_non_answer(
             {"summary": "S", "source_finding_ids": ["e1-f2"], "question_ids": ["q2"]}  # dont_know
         ],
         "unresolved_uncertainties": [],
+        "takeaway": {
+            "blind_spot": "T.",
+            "why_it_mattered": "It affects the plan.",
+            "status": "open",
+            "status_explanation": "A decision is still needed.",
+        },
     }
     fake.outcomes.append(_message(json.dumps(report)))
 
@@ -669,6 +687,12 @@ def test_helpers_summarize_and_classify_a_round_2_run(
             {"summary": "Runway", "source_finding_ids": ["e1-f1"], "question_ids": ["q1"]}
         ],
         "unresolved_uncertainties": [],
+        "takeaway": {
+            "blind_spot": "The supplied answers address the runway concern raised in this review.",
+            "why_it_mattered": "It affects the plan.",
+            "status": "open",
+            "status_explanation": "A decision is still needed.",
+        },
     }
     fake.outcomes.append(_message(json.dumps(report)))
     round_2_reassessment = asyncio.run(clarification.reassess(artifact, template)).path
@@ -801,3 +825,251 @@ def test_invalid_saved_answer_is_a_normal_input_error(
     assert "Error: Reassessment's recorded responses are invalid" in err
     assert "requires nonblank answer text" in err
     assert "Traceback" not in err
+
+
+# --- Takeaway and the conclusion lifecycle ---
+
+from blindspot.schemas import ReassessmentReport, SavedReassessmentReport  # noqa: E402
+
+
+def test_new_reports_require_a_nonblank_takeaway_but_saved_ones_may_lack_it() -> None:
+    sections = {k: v for k, v in _ROUND_1_REPORT.items() if k != "takeaway"}
+    with pytest.raises(pydantic.ValidationError):
+        ReassessmentReport.model_validate(sections)
+    with pytest.raises(pydantic.ValidationError):
+        ReassessmentReport.model_validate({**sections, "takeaway": "  "})
+    insight = ReassessmentReport.model_validate(_ROUND_1_REPORT).takeaway
+    assert insight is not None and insight.blind_spot.startswith("Equipment")
+    legacy = SavedReassessmentReport.model_validate(sections)  # saved before takeaways
+    assert legacy.takeaway is None
+    with pytest.raises(pydantic.ValidationError):
+        SavedReassessmentReport.model_validate({**sections, "takeaway": ""})
+
+
+@pytest.mark.parametrize(
+    ("takeaway", "issue_type"),
+    [pytest.param(None, "missing", id="missing"), pytest.param("   ", "model_type", id="blank")],
+)
+def test_model_report_without_takeaway_is_a_failure_not_a_conclusion(
+    tmp_path: Path,
+    fake: _FakeMessages,
+    capsys: pytest.CaptureFixture[str],
+    takeaway: str | None,
+    issue_type: str,
+) -> None:
+    run_dir = _write_run(tmp_path)
+    fake.outcomes.append(_message(json.dumps(_ROUND_1_BATCH)))
+    prepared = asyncio.run(clarification.prepare(run_dir))
+    _fill(prepared.directory / "responses.json", _ROUND_1_ANSWERS)
+    report = {k: v for k, v in _ROUND_1_REPORT.items() if k != "takeaway"}
+    if takeaway is not None:
+        report["takeaway"] = takeaway
+    fake.outcomes.append(_message(json.dumps(report)))
+    capsys.readouterr()
+
+    code = clarification.main(
+        [
+            "reassess",
+            "--clarification",
+            str(prepared.directory / "clarification.json"),
+            "--responses",
+            str(prepared.directory / "responses.json"),
+        ]
+    )
+
+    assert code == 1
+    out = capsys.readouterr()
+    assert out.out == ""
+    assert "No new assessment was produced." in out.err
+    assert "Current assessment" not in out.err
+    (saved_path,) = prepared.directory.glob("reassessment-*.json")
+    saved = json.loads(saved_path.read_text())
+    assert saved["status"] == "failed"
+    assert saved["conclusion_status"] is None
+    assert saved["report"] is None
+    assert {"schema": "reassessment_report", "loc": "takeaway", "type": issue_type} in saved[
+        "diagnostics"
+    ]["validation_errors"]
+
+
+def test_round_1_takeaway_is_saved_as_the_current_assessment(
+    tmp_path: Path, fake: _FakeMessages, capsys: pytest.CaptureFixture[str]
+) -> None:
+    run_dir = _write_run(tmp_path)
+    fake.outcomes.append(_message(json.dumps(_ROUND_1_BATCH)))
+    prepared = asyncio.run(clarification.prepare(run_dir))
+    _fill(prepared.directory / "responses.json", _ROUND_1_ANSWERS)
+    fake.outcomes.append(_message(json.dumps(_ROUND_1_REPORT)))
+    capsys.readouterr()
+
+    code = clarification.main(
+        [
+            "reassess",
+            "--clarification",
+            str(prepared.directory / "clarification.json"),
+            "--responses",
+            str(prepared.directory / "responses.json"),
+        ]
+    )
+
+    assert code == 0
+    out = capsys.readouterr()
+    assert json.loads(out.out) == _ROUND_1_REPORT  # stdout stays machine-readable JSON
+    assert "Current assessment (round 1): Blind spot: Equipment" in out.err
+    assert "One follow-up round is available" in out.err
+    (saved_path,) = prepared.directory.glob("reassessment-*.json")
+    saved = json.loads(saved_path.read_text())
+    assert saved["conclusion_status"] == "current_assessment"
+    assert saved["report"]["takeaway"] == _ROUND_1_REPORT["takeaway"]
+    assert saved["usage"]["model_calls"] == 1  # this call only
+
+
+def test_round_2_takeaway_is_saved_as_the_review_conclusion(
+    tmp_path: Path, fake: _FakeMessages, capsys: pytest.CaptureFixture[str]
+) -> None:
+    _, artifact, template = _round_2(tmp_path, fake)
+    _fill(template, {"q4": {"status": "answered", "answer": "Fully fitted."}})
+    report = {
+        **_ROUND_1_REPORT,
+        "takeaway": {
+            "blind_spot": "Opening hours are the main remaining unknown.",
+            "why_it_mattered": "It affects the plan.",
+            "status": "open",
+            "status_explanation": "A decision is still needed.",
+        },
+    }
+    fake.outcomes.append(_message(json.dumps(report)))
+
+    code = clarification.main(
+        ["reassess", "--clarification", str(artifact), "--responses", str(template)]
+    )
+
+    assert code == 0
+    err = capsys.readouterr().err
+    assert (
+        "Conclusion of this review (round 2): Blind spot: Opening hours are the main remaining"
+        in err
+    )
+    assert "One follow-up round is available" not in err
+    (saved_path,) = artifact.parent.glob("reassessment-*.json")
+    saved = json.loads(saved_path.read_text())
+    assert saved["conclusion_status"] == "review_conclusion"
+    assert saved["report"]["takeaway"] == report["takeaway"]
+
+
+def _strip_takeaway(path: Path) -> None:
+    data = json.loads(path.read_text())
+    data["report"].pop("takeaway")
+    data.pop("conclusion_status")
+    path.write_text(json.dumps(data))
+
+
+def test_legacy_report_without_takeaway_still_starts_a_followup(
+    tmp_path: Path, fake: _FakeMessages
+) -> None:
+    _, _, reassessment_path = _round_1(tmp_path, fake)
+    _strip_takeaway(reassessment_path)  # as saved before takeaways existed
+    fake.outcomes.append(_message(json.dumps(_FOLLOWUP_BATCH)))
+
+    prepared = _followup(reassessment_path)
+
+    assert prepared.error is None
+    assert prepared.artifact.prior_reassessment is not None
+    assert prepared.artifact.prior_reassessment.takeaway is None  # not invented
+    reloaded = clarification.load_artifact(prepared.directory / "clarification.json")
+    assert reloaded.prior_reassessment is not None
+    assert reloaded.prior_reassessment.takeaway is None
+
+
+def test_zero_followup_points_to_the_existing_assessment_without_another_call(
+    tmp_path: Path, fake: _FakeMessages, capsys: pytest.CaptureFixture[str]
+) -> None:
+    _, _, reassessment_path = _round_1(tmp_path, fake)
+    before = reassessment_path.read_bytes()
+    fake.outcomes.append(_message(json.dumps({"questions": []})))
+
+    assert clarification.main(["followup", "--reassessment", str(reassessment_path)]) == 0
+
+    assert len(fake.calls) == 1  # only the follow-up generation call
+    out = capsys.readouterr().out
+    assert "No useful follow-up" in out
+    assert "The conclusion available for this session is the preceding reassessment:" in out
+    assert str(reassessment_path) in out
+    assert "Blind spot: Equipment" in out
+    # An open concern can remain even though another question would not help.
+    assert "It still lists 1 remaining consideration(s) and 1 unresolved" in out
+    assert "stopping here does not resolve them" in out
+    assert reassessment_path.read_bytes() == before  # not rewritten
+    batches = reassessment_path.parent.parent.glob("clarify-*")
+    (round_2,) = [d for d in batches if d != reassessment_path.parent]
+    generation = json.loads((round_2 / "clarification.json").read_text())["question_generation"]
+    assert generation["no_useful_followup"] is True
+    assert generation["conclusion_reassessment_file"] == str(reassessment_path)
+    assert not list(round_2.glob("reassessment-*.json"))
+
+
+def test_zero_followup_with_legacy_and_empty_prior_report(
+    tmp_path: Path, fake: _FakeMessages, capsys: pytest.CaptureFixture[str]
+) -> None:
+    run_dir = _write_run(tmp_path)
+    fake.outcomes.append(_message(json.dumps(_ROUND_1_BATCH)))
+    prepared = asyncio.run(clarification.prepare(run_dir))
+    _fill(prepared.directory / "responses.json", _ROUND_1_ANSWERS)
+    resolved = {
+        "remaining_considerations": [],
+        "addressed_concerns": _ROUND_1_REPORT["addressed_concerns"],
+        "unresolved_uncertainties": [],
+        "takeaway": {
+            "blind_spot": "T.",
+            "why_it_mattered": "It affects the plan.",
+            "status": "open",
+            "status_explanation": "A decision is still needed.",
+        },
+    }
+    fake.outcomes.append(_message(json.dumps(resolved)))
+    reassessment = asyncio.run(
+        clarification.reassess(
+            prepared.directory / "clarification.json", prepared.directory / "responses.json"
+        )
+    ).path
+    assert reassessment is not None
+    _strip_takeaway(reassessment)
+    fake.outcomes.append(_message(json.dumps({"questions": []})))
+    capsys.readouterr()
+
+    assert clarification.main(["followup", "--reassessment", str(reassessment)]) == 0
+
+    out = capsys.readouterr().out
+    assert "No takeaway was recorded; read the detailed sections." in out
+    assert "It lists no remaining considerations or unresolved uncertainties." in out
+
+
+def test_round_2_without_new_context_announces_no_new_assessment(
+    tmp_path: Path, fake: _FakeMessages, capsys: pytest.CaptureFixture[str]
+) -> None:
+    round_1_reassessment, artifact, template = _round_2(tmp_path, fake)
+    _fill(template, {"q4": {"status": "deferred"}})
+
+    code = clarification.main(
+        ["reassess", "--clarification", str(artifact), "--responses", str(template)]
+    )
+
+    assert code == 0
+    assert fake.calls == []
+    err = capsys.readouterr().err
+    assert "there is no new assessment" in err
+    assert f"The latest assessment is still: {round_1_reassessment}" in err
+    assert "Conclusion of this review" not in err
+
+
+def test_followup_failure_announces_no_conclusion(
+    tmp_path: Path, fake: _FakeMessages, capsys: pytest.CaptureFixture[str]
+) -> None:
+    _, _, reassessment_path = _round_1(tmp_path, fake)
+    fake.outcomes.append(_message('{"questions": [', "max_tokens"))
+
+    assert clarification.main(["followup", "--reassessment", str(reassessment_path)]) == 1
+
+    out = capsys.readouterr()
+    assert "conclusion available" not in out.out + out.err
+    assert "Conclusion of this review" not in out.err

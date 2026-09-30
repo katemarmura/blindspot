@@ -37,6 +37,7 @@ from summarize_run import (  # noqa: E402
     _load,
     _normalized,
     _secs,
+    _takeaway_state,
     _unresolved,
     _usage,
 )
@@ -299,6 +300,7 @@ def compare(a: Side, b: Side, *, prompt_diff: bool = True) -> None:
         print(f"     {_call_diag(d.get('call_diagnostics'))}")
 
     print(f"\nSection counts: A {_counts(a)} | B {_counts(b)}")
+    print(f"Takeaway: A {_takeaway_state(a.data)} | B {_takeaway_state(b.data)}")
     print("Citations by finding ID (R=remaining, A=addressed, U=unresolved, index in section):")
     fa, fb = _citations(a, "source_finding_ids"), _citations(b, "source_finding_ids")
     artifact = a.clarification or b.clarification or {}

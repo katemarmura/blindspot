@@ -107,6 +107,9 @@ For each important concern, check:
 - **Stopping.** When the answers sufficiently cover the supplied concerns, does the report
   stop, with empty sections if appropriate, instead of inventing replacements? An empty
   section doesn't mean the plan is safe.
+- **Takeaway.** Compare the two takeaways, if present (the helper shows presence, or
+  "legacy"). Does each agree with its own sections, and did the main point move for a
+  reason in the inputs? A legacy report has no takeaway; don't count that as a regression.
 
 If a checklist applies, use it item by item. For example, reassessments of the
 `evals/reassessment/kitten-before-holiday/` fixture use its `CHECKLIST.md`; match the answer
@@ -133,3 +136,13 @@ Keep it concise:
    - Note that one pair doesn't establish consistent behaviour.
 5. **One next step:** for example a targeted prompt change, or which fixture answer set to
    run next (billable).
+
+### Structured conclusions
+
+New `report.takeaway` values are objects with `blind_spot`, `why_it_mattered`, `status`
+(open, partly_addressed, addressed), and `status_explanation`. Review them as one prioritized
+insight: do the fields concern the same gap, preserve facts and roles, and agree with the
+report sections? A structured format is not proof of semantic correctness. Null is valid
+for an empty new report. Older reports can have prose or no takeaway; do not invent a
+conversion or treat that format difference as a quality regression. The application renders
+labels and adds its bounded closing sentence only when no concerns or uncertainties remain.

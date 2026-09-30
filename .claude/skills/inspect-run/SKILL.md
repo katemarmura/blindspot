@@ -51,7 +51,7 @@ Artifact formats:
 | Follow-up (round 2) | `runs/team-*/clarify-*/clarification.json` with `round: 2` | `previous` lineage (round-1 batch and reassessment), plus copies of `prior_questions`, `prior_responses`, `prior_unanswered_question_ids`, and `prior_reassessment`. `questions` holds only the new ones (`q4`…). The helper prints `FOLLOW-UP ROUND 2`. |
 | | its `reassessment-*.json` | `clarification_round: 2`. `recorded_responses` lists **both rounds**, each tagged with `round`; the response file holds only round 2. |
 | Evaluation copy | `runs/evals/clarify-*/` | A copy of a committed fixture from `evals/`: `clarification.json` with no question-generation call, several `responses-*.json`, and the reassessments made from them. Use that fixture's `CHECKLIST.md`. |
-| | `reassessment-*.json` | `recorded_responses` actually used, `unanswered_question_ids`, `report`, `diagnostics`, `usage`, `settings.max_output_tokens`, and `call_diagnostics` (newer files). |
+| | `reassessment-*.json` | `recorded_responses` actually used, `unanswered_question_ids`, `report`, `diagnostics`, `usage`, `settings.max_output_tokens`, and `call_diagnostics` (newer files). Newer reports also have `report.takeaway` (the overall assessment) and top-level `conclusion_status` (`current_assessment` after round 1, `review_conclusion` after round 2, `null` on failure). Older ones have neither; they're legacy, not invalid, and have no conclusion to review. |
 
 Older artifacts lack later fields. Examples:
 - a `result.json` without `sources`/`synthesis` (source IDs are then derived as `e<team position>-f<finding position>` over successful experts);
@@ -89,6 +89,16 @@ Trace every conclusion to its cited IDs: synthesized finding → `source_finding
   - `not_applicable` is the user's assessment and doesn't automatically resolve related concerns.
   - User answers are reported context, not verified facts.
 
+**Takeaway.** When a report has one, check that it agrees with the detailed sections:
+- its main point is the most consequential remaining item, or "the answers address the
+  concerns raised in this review" when nothing material remains;
+- it adds nothing that isn't in the sections;
+- it keeps people, durations, and uncertainty;
+- it implies no guarantee.
+
+After a zero-question follow-up, the preceding reassessment is the conclusion available;
+open items in it are still open.
+
 Structural success is not content quality. Valid JSON, a passing schema, and resolving IDs show traceability, not that a rewritten finding faithfully represents its sources or that its claims are true.
 
 ## 5. Report
@@ -103,3 +113,13 @@ Keep it concise:
 3. **One next step:** the single most useful action, such as a prompt change to consider or a command to rerun. Note if it's billable.
 
 State material uncertainty. Don't invent issues to fill the report.
+
+### Structured conclusions
+
+New `report.takeaway` values are objects with `blind_spot`, `why_it_mattered`, `status`
+(open, partly_addressed, addressed), and `status_explanation`. Review them as one prioritized
+insight: do the fields concern the same gap, preserve facts and roles, and agree with the
+report sections? A structured format is not proof of semantic correctness. Null is valid
+for an empty new report. Older reports can have prose or no takeaway; do not invent a
+conversion or treat that format difference as a quality regression. The application renders
+labels and adds its bounded closing sentence only when no concerns or uncertainties remain.

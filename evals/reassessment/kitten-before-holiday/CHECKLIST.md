@@ -296,3 +296,149 @@ detailed one that misattributes a single action fails the attribution check.
 To rerun round 2 against the saved follow-up batch (one billable request), see the
 `reassess` command in the project README's clarification section, pointed at that batch's
 `clarification.json` and `responses.json`.
+
+## Structured conclusion evaluation
+
+New reports use `takeaway` as a single object: `blind_spot`, `why_it_mattered`, `status`,
+and `status_explanation`. All four must describe the same prioritized insight. The CLI
+renders the fields and adds its closing acknowledgment when no concerns remain. The model
+must not put a free-form closing recap into any field. Entirely empty reports use null.
+Legacy text takeaways remain readable; the historical checks below document prior failures.
+
+- [ ] The sitter update selects the in-person coverage gap, explains its consequence,
+      marks it addressed, and identifies the sitter as the decisive change.
+- [ ] The uncovered-days answers retain an open coverage gap and get no all-addressed
+      closing acknowledgment.
+- [ ] Each field stays brief and on-topic, without adding feeding/vaccination inventories.
+- [ ] Status and explanation agree with detailed sections; labels alone do not prove this.
+- [ ] No invented delays, shared permissions, permanent separation, or guarantees.
+
+## Historical prose-takeaway checks
+
+New reports end with a `takeaway`: a few short sentences explaining the key blind spots,
+why they mattered, and their current status. It isn't an arrangement inventory or a new
+investigation. Reassessments saved before this change have no takeaway (they're legacy, not
+invalid), so judge those on their sections only. The CLI prints the takeaway on stderr as the
+**current assessment** after round 1, and as the **conclusion of this review** after round 2.
+Stdout stays the report JSON.
+
+For every new report, check that the takeaway:
+
+- [ ] **Agrees with the sections.** Its main point appears in `remaining_considerations` (or,
+      when nothing material remains, the sections are empty or only addressed). It adds no
+      concern, fact, number, or recommendation that isn't in the sections.
+- [ ] **Explains an insight.** Names the gap, dependency, or assumption and why it matters,
+      then says whether it is open or addressed. Doesn't merely list the user's preparations.
+- [ ] **Doesn't invent an oversight.** A previously unstated arrangement isn't proof the user
+      neglected it. Distinguish a later change from clarification of an existing arrangement.
+- [ ] **Is short and readable.** A few short sentences in one or two brief paragraphs,
+      not a list of every item.
+- [ ] **Keeps people, durations, and uncertainty.** It doesn't merge people's roles, turn
+      "for the trip" into something permanent, or state as fact something the sections treat
+      as unknown.
+- [ ] **Makes no guarantee.** Nothing like "the plan is safe", "all risks are covered", or
+      "verified".
+
+Specific cases:
+
+1. **An open concern (case 7, `responses-three-uncovered-days.json`).** The takeaway names the
+   three days without anyone available in person as the main remaining concern. Other
+   arrangements aren't listed as new worries.
+2. **Addressed concerns (case 8, the round-2 sitter update).** The takeaway explains the
+   dependency between noticing a problem and having someone able to respond in person,
+   and that the newly booked sitter addresses the three-day gap. Other resolved concerns,
+   including trip-long separation, stay in the detailed sections. It closes
+   with a bounded acknowledgment that no additional concerns remain among those examined,
+   with no invented risks or doubts about the sitter. It
+   doesn't claim the plan is guaranteed safe, and it keeps the sitter's and the user's roles
+   distinct if it mentions them.
+3. **An important unknown (case 1 or case 4, `responses-baseline.json`).** When vaccination
+   timing or the separation setup is still unknown, the takeaway keeps that uncertainty ("it
+   is not yet known whether…"). It doesn't resolve the question or turn it into a certain
+   problem.
+4. **Zero follow-up questions with a remaining concern.** If `followup` returns no questions
+   while the preceding reassessment still has remaining considerations or unresolved
+   uncertainties, the CLI says there's no useful follow-up and names that reassessment as
+   the conclusion available for the session. It says those concerns remain, and stopping
+   doesn't resolve them. No new reassessment file is created and the old one isn't
+   rewritten.
+5. **Agreement with the detailed sections (every case).** Read the takeaway last. Every claim
+   in it should be traceable to an item in the sections, and the most consequential open
+   item shouldn't be missing from it.
+
+Not every omission is a failure: the takeaway prioritizes. A takeaway that leaves out a minor
+item passes. One that leaves out the most consequential open item, or introduces something
+new, fails.
+
+### Regression: an insightful conclusion must not manufacture an open concern
+
+Saved evidence:
+`runs/evals/clarify-20260929T185145Z-aa3e2b/reassessment-20260930T104626Z-46126b.json`.
+The takeaway usefully distinguishes noticing a problem from responding in person, but
+reopens monitoring because the exact camera-check spacing is unspecified. It also says
+detection "relies on" the camera despite the reported daily visits. Mark these as failures
+of the stopping rule and of considering the arrangements together.
+
+- [ ] With the sitter update, explain the monitoring/response dependency as addressed by
+      the reported arrangements, without requiring a precise camera schedule or continuous
+      observation unsupported by the findings. The result is a bounded assessment, not a
+      guarantee of safety.
+- [ ] With the three-uncovered-days answers, keep the actual missing in-person coverage
+      open. Do not use the stopping rule to dismiss an explicitly reported gap.
+- [ ] Do not call camera checks the only detection mechanism; daily visits also exist.
+- [ ] Explain the key insight and its status, then stop rather than listing every resolved
+      arrangement. Aim for at most three to five short sentences, fewer when sufficient.
+
+These are manual quality judgments. The saved example is local regression evidence, not
+an automated semantic test or proof that a prompt revision consistently improves outputs.
+
+### Regression: unrelated resolved details appended to the takeaway
+
+The observed sentence "The related concern about a young kitten outgrowing a once-daily
+care routine is also addressed" then lists the feeder, caretaker, and vaccination timing.
+It distracts from the monitoring/response insight and combines separate concerns.
+
+- [ ] In the fully addressed sitter case, keep the takeaway focused on the key
+      monitoring/response dependency and its status. Leave feeding and vaccination details
+      in addressed_concerns rather than appending an "also addressed" sentence.
+- [ ] Do not merge feeding frequency and vaccination timing into a single care concern
+      merely because both concern the kitten.
+- [ ] Preserve the source's meaning: whether the routine meets the kitten's needs is not
+      a claim that the kitten is "outgrowing" it.
+- [ ] Prioritize genuinely open concerns when present; this brevity rule must not hide an
+      important unresolved issue.
+
+### Regression: role inventories introduce unsupported permissions
+
+In local saved evidence
+`runs/evals/clarify-20260929T185145Z-aa3e2b/reassessment-20260930T151934Z-6ad485.json`,
+the addressed summary gives both the friend and neighbour written warning signs and
+vet-treatment authority. The recorded answers give these to the friend and sitter, not the
+neighbour. The takeaway also appends a list of resolved topics to its closing sentence.
+
+- [ ] Addressed summaries explain the gap and the decisive reported mitigation, with
+      necessary conditions, rather than reconstructing everyone's resources and duties.
+      For example, the sitter's availability addresses the three-day response gap; listing
+      all permissions is unnecessary to explain that change.
+- [ ] Omitting incidental detail is acceptable; inventing shared permissions or removing
+      an important availability restriction is not.
+- [ ] With the sitter update, close the takeaway with the bounded acknowledgment alone,
+      without a list of resolved topics appended to it.
+- [ ] With the three-uncovered-days answers, still identify the missing coverage as open;
+      do not use the all-addressed closing sentence or brevity to conceal the gap.
+
+### Regression: stale delay estimates and unrelated concerns combined
+
+Local evidence:
+`runs/evals/clarify-20260929T185145Z-aa3e2b/reassessment-20260930T152940Z-1c48fe.json`.
+The takeaway claims a problem could remain unaddressed "for a full day"; the original
+finding's estimate assumed no remote monitoring and does not establish that delay under
+the recorded arrangements. The second addressed item also combines feeding and vaccination
+timing because both appear in q1, despite their different dependencies.
+
+- [ ] Do not import a prior delay estimate after the assumptions supporting it changed.
+      Describe the known coverage gap without inventing a detection or response delay.
+- [ ] Keep feeding needs and vaccination timing distinct even when citing the same answer.
+      Combine findings only when they represent the same gap and mitigation.
+- [ ] Explain that the sitter addresses the missing in-person response without repeating
+      the full list of contacts, permissions, and warning signs in the takeaway.

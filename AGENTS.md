@@ -253,7 +253,11 @@ What exists:
     - empty sections are valid.
 
     Its attribution rules: keep each action, instruction, permission, and availability with
-    the person it belongs to, and never transfer them to someone else. Preserve durations and
+    the person it belongs to, and never transfer them to someone else. When an item
+    summarizes several people's arrangements, name the person whenever it changes, so a
+    shared grammatical subject can't carry one person's actions over to another; use
+    separate sentences in the item if needed, and don't split the concern into several
+    items. Preserve durations and
     conditions, so temporary never becomes permanent. Describe arrangements as reported
     mitigations, not guarantees. None of this is grounds to reopen addressed concerns.
 
@@ -410,6 +414,14 @@ Project-level Claude Code skills live in `.claude/skills/`:
   judges improvements, regressions, and persistent issues by meaning and cited IDs. Its
   helper, `compare_reassessments.py`, reuses `summarize_run.py`'s parsing and is tested in
   `tests/test_compare_reassessments_helper.py`.
+- `inspect-session` (`/inspect-session <path>`) reviews one whole clarification session
+  (round 1, and the follow-up round if present). It finds the session only through saved
+  lineage (a round-2 artifact's `previous`) and never by date or folder. Its helper,
+  `inspect_session.py`, reuses `summarize_run.py`'s parsing. It reports each call once, the
+  carried-forward answers (checking that earlier answers weren't dropped or changed),
+  current response files that changed, reference checks, defects, and limitations. The
+  semantic review stays in the skill's instructions. Tested in
+  `tests/test_inspect_session_helper.py`.
 
 These are development aids, not Blindspot runtime capabilities. If an artifact format
 changes, update `inspect-run`'s format table and both helpers.

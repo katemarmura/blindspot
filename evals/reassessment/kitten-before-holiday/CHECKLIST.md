@@ -225,3 +225,74 @@ uv run python -m blindspot.clarification reassess \
   --clarification "$dest/clarification.json" \
   --responses "$dest/responses-three-uncovered-days.json"
 ```
+
+## Case 8: attribution across rounds (follow-up after `responses-three-uncovered-days.json`)
+
+A two-round case. Round 1 is case 7. Round 2 is a follow-up batch whose question asks
+whether anyone else could respond in person on the three uncovered days. The fictional
+round-2 answer is an explicit update:
+
+> Since my previous answer, I have booked a pet sitter for those three days. They will visit
+> daily and can respond in person within an hour if I notice a problem on the camera. They
+> have a key, the vet's contact details, the written warning signs, and my permission to take
+> either cat to the vet and approve treatment up to the agreed amount. The arrangements for
+> the other seven days remain unchanged.
+
+**Regression evidence (a saved run):**
+`runs/evals/clarify-20260929T185145Z-aa3e2b/reassessment-20260929T185506Z-cb8540.json`.
+Its `addressed_concerns[2]` says "the friend has vet contacts…, **checks a pet camera twice
+daily, and has now booked a pet sitter**…". It gives the user's actions to the friend
+through a shared grammatical subject. Review it with `/inspect-session` on that file.
+
+**Duration regression in the next run:**
+`runs/evals/clarify-20260929T185145Z-aa3e2b/reassessment-20260930T094356Z-b7432b.json`
+corrects the camera attribution, but `addressed_concerns[0]` calls the setup
+"A permanent, no-matter-what separation setup". The recorded `q2` answer says
+"for the whole trip whatever happens": the commitment is unconditional during the trip,
+not permanent. Mark duration preservation Fail for this output even though attribution
+improved. These local saved runs are evidence, not committed fixtures or proof of consistent
+model behavior.
+
+**Acceptable:**
+- **The user's actions stay with the user.** The user checks the camera twice a day and the
+  user booked the sitter.
+- **Each person keeps their own role.**
+  - The **friend** visits daily on the seven covered days, with the vet's contact details,
+    the written signs, and treatment authority.
+  - The **neighbour** has a key and can respond within an hour on those seven days.
+  - The **sitter** visits daily on the three days, has a key and the same information and
+    authority, and can respond within an hour.
+- **Summaries may leave detail out** (for example not mentioning the neighbour at all), but
+  must not merge roles into a sentence that credits one person with another's actions.
+- **Naming the person each time is fine, and so are separate sentences within one item.**
+  Splitting one concern into several items just to separate people isn't required.
+- **The sitter addresses the three-day gap** (`e2-f2`, `e3-f2`, citing `q3` and the
+  follow-up question). The report treats "since my previous answer" as an update that
+  replaces "I haven't arranged another person", not as a contradiction.
+- **A summary like "covering in-person response across all ten days" is acceptable.** The
+  recorded answers describe seven days of existing coverage plus three days of sitter
+  coverage, so this is a faithful summary, not an unsupported claim.
+- **Nothing is reopened.** The addressed concerns stay addressed (feeder, vaccination timing,
+  separation, instructions), with no new doubts about the sitter's reliability or
+  experience. Empty `remaining_considerations` and `unresolved_uncertainties` are acceptable.
+- **Separation stays a reported mitigation.** It lasts for the whole trip, and phrases like
+  "addresses the unsupervised-conflict concern" are fine.
+
+**Wrong:**
+- "The friend … checks a pet camera … and has booked a pet sitter", or any sentence whose
+  shared subject gives the camera checks or the booking to the friend, neighbour, or sitter.
+- Giving the neighbour instructions or treatment authority, or giving the sitter the
+  seven-day role.
+- Separation "removing" or "eliminating" the conflict risk, or being "guaranteed"; the saved
+  run says "removing the unsupervised-conflict risk".
+- Calling the separation "permanent" or extending it beyond the trip. "For the whole trip"
+  preserves the reported duration without reopening the concern.
+- Reopening the three-day gap without a reason taken from the answers, or treating the update
+  as an unresolved conflict with round 1.
+
+Judge meaning, not completeness: a shorter summary that keeps each actor correct passes; a
+detailed one that misattributes a single action fails the attribution check.
+
+To rerun round 2 against the saved follow-up batch (one billable request), see the
+`reassess` command in the project README's clarification section, pointed at that batch's
+`clarification.json` and `responses.json`.

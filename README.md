@@ -315,7 +315,7 @@ The prompt tells the model:
 - to stop once the concerns are covered, so empty sections are valid (which doesn't mean the
   plan is guaranteed safe);
 - to keep each action, instruction, permission, and availability with the person you gave
-  it to, keep durations as stated (for the trip, not permanent), and describe arrangements
+  it to (naming the person whenever it changes within a summary), keep durations as stated (for the trip, not permanent), and describe arrangements
   as reported mitigations rather than guarantees;
 - to mention each point once, with titles that don't claim timing the body treats as unknown;
 - not to infer dates, timing, or a place's layout that you didn't state;
@@ -426,7 +426,7 @@ load and that `prepare` runs on a copy; they don't judge question quality.
 ### Reassessment quality check (manual, live)
 
 `evals/reassessment/kitten-before-holiday/` is a small **fictional** fixture: a clarification
-artifact, five answer sets, and a `CHECKLIST.md` of seven cases. The answer sets are: vague
+artifact, five answer sets, and a `CHECKLIST.md` of eight cases (the eighth covers attribution across a follow-up round). The answer sets are: vague
 baseline answers, answers with concrete arrangements, answers that reveal an unmet
 dependency, sufficient answers that may give an empty report, and a three-uncovered-days
 variant for checking that actors, authority, and durations are preserved. Each case lists acceptable
@@ -453,6 +453,29 @@ library only):
 ```bash
 uv run --locked python .claude/skills/inspect-run/summarize_run.py --list
 uv run --locked python .claude/skills/inspect-run/summarize_run.py runs/<run-dir>
+```
+
+### Inspecting a clarification session (coding-agent skill)
+
+`.claude/skills/inspect-session/` reviews one whole saved clarification session: round 1
+and, if present, the follow-up round. It's a read-only development aid with no API calls
+and no numeric score.
+
+- **Invoke it:** type `/inspect-session <path>`, where the path is a `reassessment-*.json`,
+  a `clarification.json`, or a `clarify-*` folder.
+- **Finding the session:** it follows the saved lineage from round 2 back to the exact
+  round-1 batch and reassessment. It never picks files because they're newer.
+- **Structural checks:** it verifies question IDs, references, and that earlier answers
+  were carried forward unchanged, using recorded answers rather than later edits to
+  `responses.json`.
+- **Content review:** it checks the questions, answers, and conclusions for repetition,
+  whether new answers are applied to the right gaps, whether people and durations are
+  kept, and whether mitigations are described without guarantees.
+
+Its helper can also run on its own:
+
+```bash
+uv run --locked python .claude/skills/inspect-session/inspect_session.py <path>
 ```
 
 ### Comparing reassessments (coding-agent skill)

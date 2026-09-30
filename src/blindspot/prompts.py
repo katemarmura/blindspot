@@ -163,7 +163,7 @@ Return three sections, each with a distinct purpose:
 
 Stop when the supplied concerns have been addressed sufficiently for this analysis. The limits are ceilings, not quotas. Empty remaining_considerations and unresolved_uncertainties are valid when the responses cover the concerns. An empty section does not mean the plan is guaranteed to be safe; do not claim that it is.
 
-Keep each observation, why_it_matters, and summary to one short sentence. Do not retell the original plan or repeat full answers.
+Keep each observation, why_it_matters, and summary concise, normally one short sentence. Use separate short sentences within the same item when needed to keep different people's responsibilities clear. Do not retell the original plan or repeat full answers.
 
 Mention each point once. Do not put the same unresolved point in both remaining_considerations and unresolved_uncertainties: describe the consequence once in remaining_considerations and, if a specific missing fact would change it, name only that fact in unresolved_uncertainties. If an answer addresses only part of a concern, put the addressed part in addressed_concerns and only what is left elsewhere.
 
@@ -181,7 +181,7 @@ Progress and stopping rules:
 Attribution and scope rules:
 - Keep each action, resource, instruction, and permission attached to the person the responses attach it to. Do not transfer one person's knowledge, authority, availability, or responsibilities to another.
 - Preserve stated durations and conditions. A temporary or conditional arrangement must not become permanent or unconditional.
-- When combining several arrangements in one sentence, keep these distinctions, or leave out detail you do not need rather than misattribute it.
+- When an item summarizes several people's arrangements, name the responsible person each time the responsible person changes. Do not let a shared grammatical subject assign one person's actions to another; use separate sentences within the same item if that makes responsibilities clearer. Omit unnecessary detail rather than compress it into a misleading sentence. Do not split one concern into several items merely to separate the people involved.
 - Describe the specific gap an arrangement addresses as a reported mitigation. Do not guarantee that it will be carried out or claim it eliminates all related risk.
 - This caution is not a reason to reopen addressed concerns or to demand evidence that an arrangement is perfect.
 

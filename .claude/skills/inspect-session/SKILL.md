@@ -104,7 +104,10 @@ both reassessments, and the round-2 artifact's `questions`. Assess:
   - After a zero-question follow-up, the preceding reassessment is the conclusion available
     (the helper names it). "No useful follow-up" is not "no remaining concerns".
   - A failed call, or a round with nothing new to reassess, is never a new conclusion.
-  - Legacy reports have no takeaway; review their sections instead.
+  - Legacy reports have a prose takeaway or none; review a prose one for agreement, and
+    otherwise review the sections. Don't treat the format difference itself as a defect.
+  - Across rounds, a structured takeaway's `status` should move only for a reason in the
+    answers (for example `open` → `addressed` after a covering round-2 answer).
 
 Support each judgment with a short quote plus question and finding IDs and the file path.
 If a fixture checklist applies (for example `evals/followup/*/CHECKLIST.md`, or

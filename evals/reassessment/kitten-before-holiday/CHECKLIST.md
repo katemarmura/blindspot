@@ -312,17 +312,32 @@ Legacy text takeaways remain readable; the historical checks below document prio
 - [ ] Each field stays brief and on-topic, without adding feeding/vaccination inventories.
 - [ ] Status and explanation agree with detailed sections; labels alone do not prove this.
 - [ ] No invented delays, shared permissions, permanent separation, or guarantees.
+- [ ] **An important unknown (`responses-baseline.json`).** When vaccination timing or the
+      separation setup is still unknown, `status` is `open` or `partly_addressed`, and
+      `status_explanation` names what remains unknown ("it is not yet known whether…").
+      It doesn't resolve the question or turn it into a certain problem, and the CLI adds no
+      all-addressed closing.
+- [ ] **Zero follow-up questions with a remaining concern.** If `followup` returns no
+      questions while the preceding reassessment still has remaining considerations or
+      unresolved uncertainties, the CLI says there's no useful follow-up and names that
+      reassessment as the available conclusion. It renders that reassessment's takeaway with
+      the same labels (or "Legacy takeaway:" for prose, or a note when it has none) and says
+      the concerns remain. No new reassessment file is created.
+- [ ] **Agreement.** Read the takeaway last. `blind_spot` is the most consequential item from
+      the sections (or, when nothing remains open, the most consequential addressed one), and
+      `status` matches where that item sits. `takeaway: null` appears only when every section
+      is empty.
 
-## Historical prose-takeaway checks
+## Historical prose-takeaway checks (legacy reports only)
 
-New reports end with a `takeaway`: a few short sentences explaining the key blind spots,
-why they mattered, and their current status. It isn't an arrangement inventory or a new
-investigation. Reassessments saved before this change have no takeaway (they're legacy, not
-invalid), so judge those on their sections only. The CLI prints the takeaway on stderr as the
-**current assessment** after round 1, and as the **conclusion of this review** after round 2.
-Stdout stays the report JSON.
+These checks apply only to reports saved while the takeaway was free prose (a few short
+sentences); new reports use the structured checks above. The renderer shows such prose as
+"Legacy takeaway: …". Reports saved before any takeaway existed have none: they're legacy,
+not invalid, so judge them on their sections only. In every format, the CLI labels the
+takeaway as the **current assessment** after round 1 and the **conclusion of this review**
+after round 2, and stdout stays the report JSON.
 
-For every new report, check that the takeaway:
+For a legacy prose takeaway, check that it:
 
 - [ ] **Agrees with the sections.** Its main point appears in `remaining_considerations` (or,
       when nothing material remains, the sections are empty or only addressed). It adds no
@@ -339,7 +354,7 @@ For every new report, check that the takeaway:
 - [ ] **Makes no guarantee.** Nothing like "the plan is safe", "all risks are covered", or
       "verified".
 
-Specific cases:
+Specific cases (written for prose takeaways; the structured equivalents are above):
 
 1. **An open concern (case 7, `responses-three-uncovered-days.json`).** The takeaway names the
    three days without anyone available in person as the main remaining concern. Other

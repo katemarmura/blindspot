@@ -107,9 +107,11 @@ For each important concern, check:
 - **Stopping.** When the answers sufficiently cover the supplied concerns, does the report
   stop, with empty sections if appropriate, instead of inventing replacements? An empty
   section doesn't mean the plan is safe.
-- **Takeaway.** Compare the two takeaways, if present (the helper shows presence, or
-  "legacy"). Does each agree with its own sections, and did the main point move for a
-  reason in the inputs? A legacy report has no takeaway; don't count that as a regression.
+- **Takeaway.** Compare the two takeaways. The helper shows each one's format: structured
+  with its `status`, legacy prose, null, or none. Does each agree with its own sections?
+  Did `blind_spot` or `status` change for a reason in the inputs (for example, a new answer
+  moving `open` to `addressed`)? A format difference between a legacy report and a
+  structured one is not a regression in itself; compare what they say.
 
 If a checklist applies, use it item by item. For example, reassessments of the
 `evals/reassessment/kitten-before-holiday/` fixture use its `CHECKLIST.md`; match the answer

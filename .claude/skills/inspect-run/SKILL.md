@@ -51,7 +51,7 @@ Artifact formats:
 | Follow-up (round 2) | `runs/team-*/clarify-*/clarification.json` with `round: 2` | `previous` lineage (round-1 batch and reassessment), plus copies of `prior_questions`, `prior_responses`, `prior_unanswered_question_ids`, and `prior_reassessment`. `questions` holds only the new ones (`q4`…). The helper prints `FOLLOW-UP ROUND 2`. |
 | | its `reassessment-*.json` | `clarification_round: 2`. `recorded_responses` lists **both rounds**, each tagged with `round`; the response file holds only round 2. |
 | Evaluation copy | `runs/evals/clarify-*/` | A copy of a committed fixture from `evals/`: `clarification.json` with no question-generation call, several `responses-*.json`, and the reassessments made from them. Use that fixture's `CHECKLIST.md`. |
-| | `reassessment-*.json` | `recorded_responses` actually used, `unanswered_question_ids`, `report`, `diagnostics`, `usage`, `settings.max_output_tokens`, and `call_diagnostics` (newer files). Newer reports also have `report.takeaway` (the overall assessment) and top-level `conclusion_status` (`current_assessment` after round 1, `review_conclusion` after round 2, `null` on failure). Older ones have neither; they're legacy, not invalid, and have no conclusion to review. |
+| | `reassessment-*.json` | `recorded_responses` actually used, `unanswered_question_ids`, `report`, `diagnostics`, `usage`, `settings.max_output_tokens`, and `call_diagnostics` (newer files). Newer reports also have a structured `report.takeaway` (`blind_spot`, `why_it_mattered`, `status`, `status_explanation`; `null` only when every section is empty) and top-level `conclusion_status` (`current_assessment` after round 1, `review_conclusion` after round 2, `null` on failure). Older reports may have a prose takeaway or none, and no `conclusion_status`; they're legacy, not invalid. |
 
 Older artifacts lack later fields. Examples:
 - a `result.json` without `sources`/`synthesis` (source IDs are then derived as `e<team position>-f<finding position>` over successful experts);
@@ -89,12 +89,17 @@ Trace every conclusion to its cited IDs: synthesized finding → `source_finding
   - `not_applicable` is the user's assessment and doesn't automatically resolve related concerns.
   - User answers are reported context, not verified facts.
 
-**Takeaway.** When a report has one, check that it agrees with the detailed sections:
-- its main point is the most consequential remaining item, or "the answers address the
-  concerns raised in this review" when nothing material remains;
-- it adds nothing that isn't in the sections;
-- it keeps people, durations, and uncertainty;
-- it implies no guarantee.
+**Takeaway.** For a structured takeaway (see "Structured conclusions" below), check that it
+agrees with the detailed sections:
+- `blind_spot` is the most consequential item there;
+- `status` matches where that item sits (`open` or `partly_addressed` while it's still in
+  remaining or unresolved; `addressed` only when the sections show it addressed);
+- `status_explanation` names the decisive change or the gap that remains;
+- no field adds anything that isn't in the sections, merges people's roles, drops
+  durations or uncertainty, or implies a guarantee.
+
+A legacy prose takeaway gets the same agreement check. A missing takeaway on an old report
+is not a defect.
 
 After a zero-question follow-up, the preceding reassessment is the conclusion available;
 open items in it are still open.

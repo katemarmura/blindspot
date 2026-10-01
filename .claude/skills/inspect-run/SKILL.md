@@ -47,7 +47,7 @@ Artifact formats:
 | | `experts.json` | Expert stage, saved before synthesis (newer runs). |
 | | `result.json` | Final: `experts`, `sources`, `synthesis`, `total_usage`. |
 | Clarification | `runs/team-*/clarify-*/clarification.json` | Plan, experts, `sources`, `synthesis`, `questions`, `question_generation`. |
-| | `responses.json` | The user-edited responses (may change after a reassessment). |
+| | `responses.json` | The user's responses, edited by hand or by the guided `answer` command (which may use another file via `--responses` and leave entries `null` or `deferred`). They may change after a reassessment; each reassessment's `responses_file` names the one it used. |
 | Follow-up (round 2) | `runs/team-*/clarify-*/clarification.json` with `round: 2` | `previous` lineage (round-1 batch and reassessment), plus copies of `prior_questions`, `prior_responses`, `prior_unanswered_question_ids`, and `prior_reassessment`. `questions` holds only the new ones (`q4`…). The helper prints `FOLLOW-UP ROUND 2`. |
 | | its `reassessment-*.json` | `clarification_round: 2`. `recorded_responses` lists **both rounds**, each tagged with `round`; the response file holds only round 2. |
 | Evaluation copy | `runs/evals/clarify-*/` | A copy of a committed fixture from `evals/`: `clarification.json` with no question-generation call, several `responses-*.json`, and the reassessments made from them. Use that fixture's `CHECKLIST.md`. |

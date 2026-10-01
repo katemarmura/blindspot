@@ -1263,24 +1263,32 @@ def render_conclusion(report: ReassessmentReport | SavedReassessmentReport) -> s
     return "\n".join(lines)
 
 
-def _print_available_conclusion(artifact: ClarificationArtifact) -> None:
-    """Point to the preceding reassessment as the session's available conclusion."""
+def available_conclusion_lines(artifact: ClarificationArtifact) -> list[str]:
+    """Lines pointing to the preceding reassessment as the session's available conclusion."""
     previous = artifact.previous
     report = artifact.prior_reassessment
     if previous is None or report is None:
-        return
-    print("The conclusion available for this session is the preceding reassessment:")
-    print(f"  {previous.reassessment_file}")
-    print(render_conclusion(report))
+        return []
+    lines = [
+        "The conclusion available for this session is the preceding reassessment:",
+        f"  {previous.reassessment_file}",
+        render_conclusion(report),
+    ]
     open_items = len(report.remaining_considerations) + len(report.unresolved_uncertainties)
     if open_items:
-        print(
+        lines.append(
             f"  It still lists {len(report.remaining_considerations)} remaining "
             f"consideration(s) and {len(report.unresolved_uncertainties)} unresolved "
             "uncertainty(ies); stopping here does not resolve them."
         )
     else:
-        print("  It lists no remaining considerations or unresolved uncertainties.")
+        lines.append("  It lists no remaining considerations or unresolved uncertainties.")
+    return lines
+
+
+def _print_available_conclusion(artifact: ClarificationArtifact) -> None:
+    for line in available_conclusion_lines(artifact):
+        print(line)
 
 
 def _report_prepared(prepared: PreparedClarification, label: str) -> int:
@@ -1373,6 +1381,21 @@ def _parse_args(argv: list[str] | None) -> argparse.Namespace:
     follow.add_argument(
         "--reassessment", required=True, type=Path, help="A round-1 reassessment-*.json"
     )
+    answer = commands.add_parser(
+        "answer", help="Answer a batch's questions one at a time (no API key needed)."
+    )
+    answer.add_argument("--clarification", required=True, type=Path, help="clarification.json")
+    answer.add_argument(
+        "--responses",
+        type=Path,
+        help="Response file to read and update (default: responses.json next to the batch; "
+        "created from the template if missing).",
+    )
+    answer.add_argument(
+        "--revisit-deferred",
+        action="store_true",
+        help="Also ask questions previously saved for later.",
+    )
     return parser.parse_args(argv)
 
 
@@ -1382,6 +1405,10 @@ def main(argv: list[str] | None = None) -> int:
         return asyncio.run(_run_prepare(args.run))
     if args.command == "followup":
         return asyncio.run(_run_followup(args.reassessment))
+    if args.command == "answer":
+        from blindspot.guided import run_guided_cli  # imports this module
+
+        return run_guided_cli(args.clarification, args.responses, args.revisit_deferred)
     return asyncio.run(_run_reassess(args.clarification, args.responses))
 
 

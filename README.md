@@ -285,6 +285,37 @@ In `responses.json`, set each question's `status` to one of:
 
 Leave `status` as `null` (or delete the entry) to skip a question.
 
+**Guided answering (instead of editing the JSON).** You can answer a batch's questions one
+at a time in the terminal. It works for round-1 and follow-up batches, and needs no API key:
+
+```bash
+uv run python -m blindspot.clarification answer \
+  --clarification runs/team-<id>/clarify-<id>/clarification.json \
+  [--responses runs/team-<id>/clarify-<id>/my-answers.json] [--revisit-deferred]
+```
+
+1. **Each question shows** its number in the batch, its perspectives, and why it matters.
+   Choose `a` (answer now; text required), `d` (I don't know), `n` (not applicable, with an
+   optional explanation), `l` (save for later, recorded as `deferred`), or `q` (quit).
+2. **Every response is saved straight away**, as a validated, atomic write to the response
+   file (`responses.json` next to the batch unless you pass `--responses`).
+   - A missing file is created from the template.
+   - An existing invalid file is reported and never replaced.
+   - Quitting, Ctrl+D, or Ctrl+C keeps what you've already saved; a half-typed answer isn't
+     recorded.
+3. **Run the same command again to continue.** Answered, `dont_know`, and `not_applicable`
+   questions are skipped. Deferred ones are skipped too unless you pass `--revisit-deferred`,
+   and each question is asked at most once per session. To correct an answer, edit the
+   response file.
+4. **At the end**, you see what's complete, deferred, and unanswered. If any answer could
+   change the assessment, choose `r` to reassess now (**at most one billable request**,
+   using the same validation and saving as `reassess`) or `x` to exit with your answers
+   saved.
+   - The result is shown as the current assessment (round 1) or the conclusion of this
+     review (round 2).
+   - A follow-up batch is still a separate `followup` command.
+   - A batch with no questions, or with only deferred or unanswered ones, makes no call.
+
 `reassess`:
 
 - It validates both files. Unknown question IDs, duplicate responses, and a status that

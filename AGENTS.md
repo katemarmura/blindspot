@@ -289,6 +289,25 @@ What exists:
 
     The rules stay general, with no domain-specific wording. Judge prompt changes with the
     manual fixture in `evals/reassessment/` (its `CHECKLIST.md`), not with mocked tests.
+  - **`answer --clarification … [--responses …] [--revisit-deferred]` (`guided.py`):**
+    guided, one-question-at-a-time answering of a round-1 or round-2 batch.
+    - **Input and output:** a small `Terminal` protocol with `ask` and `say`. `StdTerminal`
+      wraps `input` and `print`; tests script it.
+    - **Checks before any write:** it validates the artifact (`load_artifact`) and an
+      existing response file (`load_responses`). An invalid file is reported and never
+      replaced, and a missing one is created from `_template`.
+    - **Saving:** each response is checked with `ResponseEntry` and written immediately with
+      `write_json`, preserving other entries and metadata. Artifacts and reassessments are
+      never touched. q, end of input, or Ctrl+C stop without recording the current
+      question.
+    - **Resuming:** it skips `answered`, `dont_know`, and `not_applicable`, and skips
+      `deferred` unless `--revisit-deferred` is passed. It makes one pass per session, with
+      no cycling.
+    - **Reassessment:** only on an explicit `r`, after a one-billable-request notice. It
+      calls `reassess()` and shows the result with `render_conclusion`. Configuration is
+      loaded only then, so answering needs no credentials. It never moves on to a follow-up
+      round by itself.
+    - **Covered by** `tests/test_guided_cli.py`.
   - **`followup --reassessment …/reassessment-*.json` (round 2, manual, at most once):**
     - `load_followup_source` validates everything before any call or file is created:
       - the reassessment is a successful round-1 one with a report;

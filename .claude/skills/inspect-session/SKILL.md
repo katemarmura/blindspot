@@ -92,6 +92,13 @@ both reassessments, and the round-2 artifact's `questions`. Assess:
   the person the answer names. Nothing is transferred to someone else.
 - **Durations and conditions survive.** "For the trip" doesn't become "permanently";
   "on the other seven days" doesn't become "always".
+- **Research, if used.** The helper reports each research file a reassessment used, once.
+  Check that its evidence supports the cited items and that missing facts stay open. Also
+  check that a research file is never reused across different answers, findings, or
+  question wording; the code rejects that, so a mismatch is a defect. A round-2 batch built
+  on a researched reassessment carries that research (`prior_research`), and its round-2
+  reassessment's `research` block shows `carried_forward_from_round: 1`. The answers
+  recorded since weren't researched, so check those claims aren't overstated as sourced.
 - **Mitigation, not guarantee.** Reported arrangements are described as reducing or
   addressing a gap, not as eliminating a risk or guaranteeing an outcome.
 - **No repetition or invented requirements** across sections or rounds.

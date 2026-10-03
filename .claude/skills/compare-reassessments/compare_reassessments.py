@@ -114,6 +114,12 @@ def _prompt(side: Side) -> str | None:
     return prompt if isinstance(prompt, str) else None
 
 
+def _research_id(side: Side) -> str:
+    """The research artifact a reassessment used ("none" when it used none)."""
+    used = side.data.get("research")
+    return str(used.get("research_id")) if isinstance(used, dict) else "none"
+
+
 def _settings(side: Side) -> dict[str, Any]:
     return {
         "requested_model": side.data.get("requested_model"),
@@ -147,6 +153,7 @@ def classify(a: Side, b: Side) -> str:
         ("answers", _responses(a), _responses(b)),
         ("prompt", _prompt(a), _prompt(b)),
         ("settings", _settings(a), _settings(b)),
+        ("research", _research_id(a), _research_id(b)),
     ):
         if left is None or right is None:
             unknown.append(name)
@@ -161,6 +168,8 @@ def classify(a: Side, b: Side) -> str:
         return "answer change: same context and prompt" + suffix
     if changes == ["settings"]:
         return "settings change only" + suffix
+    if changes == ["research"]:
+        return "research change: same context, answers, and prompt; evidence differs" + suffix
     return f"multiple changes ({', '.join(changes)}): do not attribute to one cause" + suffix
 
 

@@ -33,10 +33,15 @@ from blindspot.schemas import (
     ExpertDefinition,
     ExpertReport,
     Finding,
+    MissingInformation,
     ProposedQuestion,
     QuestionBatch,
     ReassessmentReport,
     RemainingConsideration,
+    ResearchExcerpt,
+    ResearchFinding,
+    ResearchQuestion,
+    ResearchReport,
     SynthesisReport,
     SynthesizedFinding,
     TeamPlan,
@@ -127,6 +132,7 @@ FailureStage = Literal[
     "clarification_questions",
     "reassessment",
     "followup_questions",
+    "research",
 ]
 
 # Why the bounded recovery was not attempted after an initial-stage failure.
@@ -147,6 +153,7 @@ ValidationSchema = Literal[
     "synthesis_report",
     "question_batch",
     "reassessment_report",
+    "research_report",
 ]
 
 
@@ -224,6 +231,11 @@ _KNOWN_FIELDS = frozenset(
         *ProposedQuestion.model_fields,
         *ReassessmentReport.model_fields,
         *ConclusionInsight.model_fields,
+        *ResearchReport.model_fields,
+        *ResearchQuestion.model_fields,
+        *ResearchFinding.model_fields,
+        *ResearchExcerpt.model_fields,
+        *MissingInformation.model_fields,
         *RemainingConsideration.model_fields,
         *AddressedConcern.model_fields,
         *UnresolvedUncertainty.model_fields,

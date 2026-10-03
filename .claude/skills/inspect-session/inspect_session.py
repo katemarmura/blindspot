@@ -30,6 +30,7 @@ from summarize_run import (  # noqa: E402
     _diag,
     _load,
     _normalized,
+    _research_used,
     _secs,
     _takeaway_state,
     _unresolved,
@@ -229,6 +230,7 @@ def _reassessment_line(label: str, path: Path | None, data: dict[str, Any] | Non
         f"{_secs(data.get('elapsed_seconds'))} {_usage(data.get('usage'))}"
         f"{_diag(data.get('diagnostics'))}\n      {_call_diag(data.get('call_diagnostics'))}"
         f"\n      {_takeaway_state(data)}"
+        f"\n      {_research_used(data)}"
     )
 
 
@@ -398,6 +400,32 @@ def _check_reports(s: Session, known: set[str]) -> list[str]:
     return lines
 
 
+def _research_lines(s: Session) -> list[str]:
+    """Research artifacts used by this session's reassessments, each reported once."""
+    used: dict[str, Path] = {}
+    for path in [s.r1_reassessment_path, *s.r2_reassessment_paths]:
+        record = (_json(path) or {}).get("research")
+        if isinstance(record, dict) and isinstance(record.get("research_file"), str):
+            used.setdefault(record["research_file"], Path(record["research_file"]))
+    lines: list[str] = []
+    for name, path in used.items():
+        data = _json(path)
+        if data is None:
+            s.limitations.append(f"research artifact named by a reassessment not found: {name}")
+            continue
+        snapshot = data.get("input_snapshot") or {}
+        batches = {(a or {}).get("clarification_id") for a in (s.r1_artifact, s.r2_artifact) if a}
+        if snapshot.get("clarification_id") not in batches:
+            s.defects.append(f"{path.name}: research belongs to a different clarification batch")
+        tools = data.get("server_tool_usage") or {}
+        lines.append(
+            f"  research {path.name}: {data.get('status')} {_usage(data.get('usage'))} "
+            f"searches={tools.get('web_search_requests', 'unknown')} "
+            f"fetches={tools.get('web_fetch_requests', 'unknown')}"
+        )
+    return lines
+
+
 def _original_usage(s: Session) -> str:
     artifact = s.r1_artifact or s.r2_artifact or {}
     directory = (artifact.get("source_run") or {}).get("directory")
@@ -438,6 +466,7 @@ def review(s: Session) -> list[str]:
             lines.append("  round 2 reassessment: none (not run yet, or nothing new to reassess)")
         for path in s.r2_reassessment_paths:
             lines.append(_reassessment_line("round 2 reassessment", path, _json(path)))
+    lines += _research_lines(s)
     lines.append("Original investigation usage (separate):")
     lines.append(_original_usage(s))
 

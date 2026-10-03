@@ -29,6 +29,7 @@ loop, and a third round is rejected.
 
 import argparse
 import asyncio
+import hashlib
 import json
 import secrets
 import sys
@@ -422,6 +423,78 @@ def _error_fields(error: ClarificationError | None) -> dict[str, Any]:
 # --- Stage 1: prepare questions ---
 
 
+class _SavedResearchSource(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+
+    id: str
+    url: str
+    title: str | None = None
+    retrieved_at: str | None = None
+    page_age: str | None = None
+
+
+class _SavedEvidence(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+
+    source_id: str
+    quote: str
+
+
+class _SavedResearchFinding(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+
+    source_statement: str
+    interpretation: str
+    applicability_limits: str
+    evidence: list[_SavedEvidence] = Field(min_length=1)
+
+
+class _SavedResearchQuestion(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+
+    id: str
+    question: str
+    source_finding_ids: list[str]
+    status: str
+    supported_findings: list[_SavedResearchFinding]
+    missing_information: list[dict[str, Any]]
+    conflict_notes: list[str]
+    limitations: list[str]
+
+
+class ResearchContent(BaseModel):
+    """The validated evidence of one research artifact, as supplied to later stages.
+
+    A follow-up (round 2) artifact keeps a copy as `prior_research`, so the
+    evidence behind round-1 research citations travels with the batch.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    research_id: str
+    research_file: str
+    sources: list[_SavedResearchSource]
+    questions: list[_SavedResearchQuestion]
+
+    @property
+    def source_ids(self) -> set[str]:
+        return {source.id for source in self.sources}
+
+
+def _research_citations(report: ReassessmentSections) -> set[str]:
+    """Every research source ID a report cites (items and structured takeaway)."""
+    sections: list[list[Any]] = [
+        report.remaining_considerations,
+        report.addressed_concerns,
+        report.unresolved_uncertainties,
+    ]
+    cited = {rid for items in sections for item in items for rid in item.research_source_ids}
+    takeaway = getattr(report, "takeaway", None)
+    if isinstance(takeaway, ConclusionInsight):
+        cited |= set(takeaway.research_source_ids)
+    return cited
+
+
 class _ArtifactExpert(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -450,6 +523,7 @@ _ROUND_2_FIELDS = {
     "prior_responses",
     "prior_unanswered_question_ids",
     "prior_reassessment",
+    "prior_research",
 }
 
 
@@ -485,6 +559,8 @@ class ClarificationArtifact(BaseModel):
     prior_responses: list[ResponseEntry] = Field(default_factory=list)
     prior_unanswered_question_ids: list[str] = Field(default_factory=list)
     prior_reassessment: SavedReassessmentReport | None = None
+    # The research the round-1 reassessment used, if any; omitted when there is none.
+    prior_research: ResearchContent | None = Field(default=None, exclude_if=lambda v: v is None)
 
     @model_validator(mode="after")
     def _check_unique_question_ids(self) -> "ClarificationArtifact":
@@ -504,6 +580,7 @@ class ClarificationArtifact(BaseModel):
             self.prior_responses,
             self.prior_unanswered_question_ids,
             self.prior_reassessment,
+            self.prior_research,
         )
         if self.round == 1:
             if any(prior):
@@ -524,6 +601,13 @@ class ClarificationArtifact(BaseModel):
             raise ValueError(
                 "each prior question must appear exactly once, in prior_responses or "
                 "prior_unanswered_question_ids"
+            )
+        # Research citations in the copied report must resolve against the copied evidence.
+        cited = _research_citations(self.prior_reassessment)
+        available = self.prior_research.source_ids if self.prior_research is not None else set()
+        if not cited <= available:
+            raise ValueError(
+                "the prior reassessment cites research sources that prior_research does not hold"
             )
         return self
 
@@ -798,14 +882,30 @@ def _reassessment_input(artifact: ClarificationArtifact, responses: RecordedResp
 
 
 def _reassessment_reference_issues(
-    report: ReassessmentSections, artifact: ClarificationArtifact, responses: RecordedResponses
+    report: ReassessmentSections,
+    artifact: ClarificationArtifact,
+    responses: RecordedResponses,
+    research_ids: set[str] | None = None,
 ) -> tuple[ValidationIssue, ...]:
+    """Reference checks. `research_ids` are the supplied research artifact's source IDs
+    (None when no research was supplied, so any research citation is invalid)."""
     sources = artifact.context().sources
     question_ids = {q.id for q in artifact.all_questions}
     issues: list[ValidationIssue] = []
 
     def issue(loc: str, kind: str) -> None:
         issues.append(ValidationIssue(schema="reassessment_report", loc=loc, type=kind))
+
+    def check_research_ids(loc: str, ids: list[str]) -> None:
+        for j, rid in enumerate(ids):
+            if research_ids is None:
+                issue(f"{loc}.research_source_ids.{j}", "research_source_without_research")
+            elif rid not in research_ids:
+                issue(f"{loc}.research_source_ids.{j}", "unknown_research_source_id")
+
+    takeaway = getattr(report, "takeaway", None)
+    if isinstance(takeaway, ConclusionInsight):
+        check_research_ids("takeaway", takeaway.research_source_ids)
 
     sections: list[tuple[str, list[Any]]] = [
         ("remaining_considerations", report.remaining_considerations),
@@ -814,6 +914,7 @@ def _reassessment_reference_issues(
     ]
     for section, items in sections:
         for i, item in enumerate(items):
+            check_research_ids(f"{section}.{i}", item.research_source_ids)
             for j, sid in enumerate(item.source_finding_ids):
                 if sid not in sources:
                     issue(f"{section}.{i}.source_finding_ids.{j}", "unknown_source_id")
@@ -827,6 +928,162 @@ def _reassessment_reference_issues(
                     # Only an actual answer (or a not-applicable assessment) can address a concern.
                     issue(f"{section}.{i}.question_ids.{j}", "question_not_answered")
     return tuple(issues)
+
+
+def _sha256(value: object) -> str:
+    """A deterministic hash of JSON-compatible data (sorted keys, no whitespace)."""
+    text = json.dumps(value, sort_keys=True, ensure_ascii=False, separators=(",", ":"))
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+
+# What each snapshot key covers, for a precise mismatch message.
+_SNAPSHOT_LABELS = {
+    "clarification_id": "clarification batch",
+    "clarification_round": "clarification round",
+    "plan_sha256": "plan",
+    "findings_sha256": "expert findings",
+    "question_ids": "question IDs",
+    "questions_sha256": "question wording",
+    "recorded_responses": "recorded answers",
+    "unanswered_question_ids": "unanswered questions",
+}
+
+
+def answers_snapshot(
+    artifact: ClarificationArtifact, responses: RecordedResponses
+) -> dict[str, Any]:
+    """The exact research-relevant inputs: batch, plan, findings, questions, and answers.
+
+    The plan, the expert findings (each expert's assignment and report), and the full
+    questions of every round are hashed; recorded answers are kept verbatim. Research
+    saves this; reassessment recomputes it and requires an exact match, so evidence is
+    never applied to another plan, finding set, question wording, or answer set.
+    """
+    recorded = (
+        _accumulated_json(artifact, responses)
+        if artifact.round == 2
+        else [_response_json(r) for r in responses.recorded]
+    )
+    return {
+        "clarification_id": artifact.clarification_id,
+        "clarification_round": artifact.round,
+        "plan_sha256": hashlib.sha256(artifact.plan.encode("utf-8")).hexdigest(),
+        "findings_sha256": _sha256([e.model_dump(mode="json") for e in artifact.experts]),
+        "question_ids": [q.id for q in artifact.all_questions],
+        "questions_sha256": _sha256([q.model_dump(mode="json") for q in artifact.all_questions]),
+        "recorded_responses": recorded,
+        "unanswered_question_ids": _accumulated(artifact, responses).unanswered,
+    }
+
+
+def _snapshot_differences(saved: dict[str, Any], current: dict[str, Any]) -> list[str]:
+    keys = [*_SNAPSHOT_LABELS, *sorted((set(saved) | set(current)) - set(_SNAPSHOT_LABELS))]
+    return [_SNAPSHOT_LABELS.get(k, k) for k in keys if saved.get(k) != current.get(k)]
+
+
+class _SavedResearch(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+
+    research_id: str
+    status: Literal["completed", "failed"]
+    input_snapshot: dict[str, Any]
+    sources: list[_SavedResearchSource]
+    questions: list[_SavedResearchQuestion]
+
+
+@dataclass(frozen=True)
+class ResearchEvidence:
+    """Validated research evidence supplied to a later stage.
+
+    `carried_forward` marks round-1 research travelling with a follow-up batch:
+    it was made for the round-1 answers, not for answers recorded since.
+    """
+
+    content: ResearchContent
+    carried_forward: bool = False
+
+    @property
+    def research_id(self) -> str:
+        return self.content.research_id
+
+    @property
+    def source_ids(self) -> set[str]:
+        return self.content.source_ids
+
+    def link(self) -> dict[str, Any]:
+        """The lineage block saved in a reassessment that used this evidence."""
+        return {
+            "research_id": self.research_id,
+            "research_file": self.content.research_file,
+            "source_ids": sorted(self.source_ids),
+            **({"carried_forward_from_round": 1} if self.carried_forward else {}),
+        }
+
+    def section(self) -> str:
+        data = {
+            "sources": [source.model_dump() for source in self.content.sources],
+            "questions": [
+                {
+                    "question": q.question,
+                    "source_finding_ids": q.source_finding_ids,
+                    "status": q.status,
+                    "supported_findings": [f.model_dump() for f in q.supported_findings],
+                    "missing_information": q.missing_information,
+                    "conflict_notes": q.conflict_notes,
+                    "limitations": q.limitations,
+                }
+                for q in self.content.questions
+            ],
+        }
+        origin = (
+            " It was made for the first-round recorded answers; answers recorded since may "
+            "change how it applies, and where they differ the user's answers take precedence."
+            if self.carried_forward
+            else ""
+        )
+        return (
+            f"\n\nExternal research evidence (research {self.research_id}).{origin} Quotes were "
+            "checked against text retrieved from the listed public pages; source_statement, "
+            "interpretation, and applicability_limits are the research model's reading, not "
+            "verified facts about this user. Retrieval time is not proof that a rule is current. "
+            "Questions with insufficient evidence, conflicting sources, failed retrieval, or "
+            "missing user information remain open uncertainty, not evidence of no concern:\n"
+            f"{json.dumps(data, indent=2, ensure_ascii=False)}"
+        )
+
+
+def load_research_evidence(
+    path: Path, artifact: ClarificationArtifact, responses: RecordedResponses
+) -> ResearchEvidence:
+    """Validate a research artifact for this batch and answer set, before any call."""
+    saved: _SavedResearch = _validate(
+        _SavedResearch, _read_json(path, "Research artifact"), "Research artifact"
+    )
+    if saved.status != "completed":
+        raise ClarificationInputError(
+            "Research artifact records a failed research stage and cannot be used as evidence; "
+            "reassess without --research or run research again. No call was made."
+        )
+    differences = _snapshot_differences(saved.input_snapshot, answers_snapshot(artifact, responses))
+    if differences:
+        raise ClarificationInputError(
+            "Research artifact was made from different inputs (differs in: "
+            f"{', '.join(differences)}); it cannot be applied here. No call was made."
+        )
+    source_ids = {source.id for source in saved.sources}
+    cited = {e.source_id for q in saved.questions for f in q.supported_findings for e in f.evidence}
+    if not cited <= source_ids:
+        raise ClarificationInputError(
+            "Research artifact is inconsistent: evidence cites unknown source IDs. "
+            "No call was made."
+        )
+    content = ResearchContent(
+        research_id=saved.research_id,
+        research_file=str(path),
+        sources=saved.sources,
+        questions=saved.questions,
+    )
+    return ResearchEvidence(content)
 
 
 @dataclass(frozen=True)
@@ -854,14 +1111,32 @@ def _conclusion_status(artifact: ClarificationArtifact, error: ClarificationErro
     return "current_assessment" if artifact.round == 1 else "review_conclusion"
 
 
-async def reassess(artifact_path: Path, responses_path: Path) -> Reassessment:
+async def reassess(
+    artifact_path: Path, responses_path: Path, research_path: Path | None = None
+) -> Reassessment:
     """Reassess once with the recorded responses; save to a new `reassessment-*.json`.
 
-    Raises `ClarificationInputError` for invalid files. Makes no call (and
-    saves nothing) when every response is missing or deferred.
+    `research_path` optionally supplies a research artifact as external evidence; it
+    must come from this batch, its findings and questions, and exactly these recorded
+    answers, or it is rejected before any call. A follow-up batch that carries the
+    round-1 research uses it automatically and refuses another research artifact.
+    Raises `ClarificationInputError` for invalid files. Makes no call (and saves
+    nothing) when every response is missing or deferred.
     """
     artifact = load_artifact(artifact_path)
     responses = load_responses(responses_path, artifact)
+    research: ResearchEvidence | None = None
+    if artifact.prior_research is not None:
+        if research_path is not None:
+            raise ClarificationInputError(
+                "This follow-up batch already carries the round-1 research "
+                f"({artifact.prior_research.research_id}), which is included automatically. "
+                "Combining it with another research artifact is not supported; reassess "
+                "without --research. No call was made."
+            )
+        research = ResearchEvidence(artifact.prior_research, carried_forward=True)
+    elif research_path is not None:
+        research = load_research_evidence(research_path, artifact, responses)
     if not responses.has_new_context:
         return Reassessment(None, None, None, None, responses, *_round_info(artifact))
     get_anthropic_api_key()
@@ -875,11 +1150,15 @@ async def reassess(artifact_path: Path, responses_path: Path) -> Reassessment:
             stage="reassessment",
             schema_name="reassessment_report",
             system=REASSESSMENT_SYSTEM_PROMPT,
-            user_content=_reassessment_input(artifact, responses),
+            user_content=_reassessment_input(artifact, responses)
+            + (research.section() if research is not None else ""),
             output_schema=ReassessmentReport,
             max_tokens=REASSESSMENT_MAX_OUTPUT_TOKENS,
             check=lambda parsed: _reassessment_reference_issues(
-                parsed, artifact, _accumulated(artifact, responses)
+                parsed,
+                artifact,
+                _accumulated(artifact, responses),
+                research.source_ids if research is not None else None,
             ),
         )
     except ClarificationError as exc:
@@ -915,6 +1194,7 @@ async def reassess(artifact_path: Path, responses_path: Path) -> Reassessment:
             "status": "failed" if error is not None else "success",
             "conclusion_status": _conclusion_status(artifact, error),
             **round_fields,
+            **({"research": research.link()} if research is not None else {}),
             "report": report.model_dump() if report is not None else None,
             "requested_model": requested_model,
             **_call_fields(call, error),
@@ -942,6 +1222,16 @@ class _SavedResponse(BaseModel):
     answer: str | None = None
 
 
+class _ResearchLink(BaseModel):
+    """The `research` block a reassessment saves when it used research."""
+
+    model_config = ConfigDict(extra="ignore")
+
+    research_id: str
+    research_file: str
+    source_ids: list[str]
+
+
 class _SavedReassessment(BaseModel):
     """The parts of a saved `reassessment-*.json` a follow-up round depends on."""
 
@@ -956,6 +1246,8 @@ class _SavedReassessment(BaseModel):
     unanswered_question_ids: list[str]
     # Older reports have no takeaway; they still load and can start a follow-up.
     report: SavedReassessmentReport | None = None
+    # The research this reassessment used, if any (absent in older files).
+    research: _ResearchLink | None = None
 
 
 @dataclass(frozen=True)
@@ -967,6 +1259,8 @@ class FollowupSource:
     artifact_path: Path
     artifact: ClarificationArtifact
     responses: RecordedResponses
+    # The research the reassessment used, re-validated against its batch and answers.
+    research: ResearchEvidence | None = None
 
 
 def _artifact_path_for(reassessment_path: Path, saved: _SavedReassessment) -> Path:
@@ -1039,12 +1333,55 @@ def load_followup_source(reassessment_path: Path) -> FollowupSource:
             f"Reassessment's recorded responses are invalid ({details}). No call was made."
         ) from exc
     responses = RecordedResponses(recorded, list(saved.unanswered_question_ids))
-    if _reassessment_reference_issues(saved.report, artifact, responses):
+    research = (
+        _followup_research(reassessment_path, saved.research, artifact, responses)
+        if saved.research is not None
+        else None
+    )
+    if _reassessment_reference_issues(
+        saved.report, artifact, responses, research.source_ids if research is not None else None
+    ):
         raise ClarificationInputError(
-            "Reassessment report cites findings or questions that do not resolve against its "
-            "batch. No call was made."
+            "Reassessment report cites findings, questions, or research sources that do not "
+            "resolve against its batch and research. No call was made."
         )
-    return FollowupSource(reassessment_path, saved, artifact_path, artifact, responses)
+    return FollowupSource(reassessment_path, saved, artifact_path, artifact, responses, research)
+
+
+def _followup_research(
+    reassessment_path: Path,
+    link: _ResearchLink,
+    artifact: ClarificationArtifact,
+    responses: RecordedResponses,
+) -> ResearchEvidence:
+    """Reload and re-validate the research a round-1 reassessment used.
+
+    The research must still exist, match the batch and the answers that reassessment
+    recorded, and be the same artifact (ID and sources) the reassessment named.
+    Otherwise the follow-up is refused, so cited evidence is never detached.
+    """
+    named = Path(link.research_file)
+    candidates = [named, reassessment_path.parent / named.name]
+    path = next((c for c in candidates if c.is_file()), None)
+    if path is None:
+        raise ClarificationInputError(
+            f"The reassessment used research {link.research_id}, but its file was not found "
+            f"(tried {named}). A follow-up cannot carry that evidence. No call was made."
+        )
+    try:
+        evidence = load_research_evidence(path, artifact, responses)
+    except ClarificationInputError as exc:
+        raise ClarificationInputError(
+            f"The research this reassessment used cannot be validated: {exc}"
+        ) from exc
+    if evidence.research_id != link.research_id or sorted(evidence.source_ids) != sorted(
+        link.source_ids
+    ):
+        raise ClarificationInputError(
+            f"Research file {path} is not the research the reassessment used "
+            f"({link.research_id}). No call was made."
+        )
+    return evidence
 
 
 def _followup_input(source: FollowupSource) -> str:
@@ -1068,6 +1405,7 @@ def _followup_input(source: FollowupSource) -> str:
         f"{dump(source.responses.unanswered)}\n\n"
         "Latest reassessment (a model interpretation of the findings and responses, not user "
         f"input):\n{dump(source.reassessment.report.model_dump())}"
+        + (source.research.section() if source.research is not None else "")
     )
 
 
@@ -1163,6 +1501,7 @@ async def prepare_followup(reassessment_path: Path) -> PreparedClarification:
         prior_responses=source.responses.recorded,
         prior_unanswered_question_ids=source.responses.unanswered,
         prior_reassessment=source.reassessment.report,
+        prior_research=source.research.content if source.research is not None else None,
     )
     write_json(directory / ARTIFACT_FILENAME, artifact.to_json())
     if error is None:
@@ -1320,9 +1659,11 @@ def _report_prepared(prepared: PreparedClarification, label: str) -> int:
     return 0
 
 
-async def _run_reassess(artifact_path: Path, responses_path: Path) -> int:
+async def _run_reassess(
+    artifact_path: Path, responses_path: Path, research_path: Path | None = None
+) -> int:
     try:
-        result = await reassess(artifact_path, responses_path)
+        result = await reassess(artifact_path, responses_path, research_path)
     except ClarificationInputError as exc:
         print(f"Error: {exc}", file=sys.stderr)
         return 1
@@ -1375,6 +1716,11 @@ def _parse_args(argv: list[str] | None) -> argparse.Namespace:
     re = commands.add_parser("reassess", help="Reassess using a filled-in response file.")
     re.add_argument("--clarification", required=True, type=Path, help="clarification.json")
     re.add_argument("--responses", required=True, type=Path, help="Edited responses.json")
+    re.add_argument(
+        "--research",
+        type=Path,
+        help="Optional research-*.json made from this batch and these exact answers.",
+    )
     follow = commands.add_parser(
         "followup", help="Generate one follow-up batch (round 2) from a successful reassessment."
     )
@@ -1409,7 +1755,7 @@ def main(argv: list[str] | None = None) -> int:
         from blindspot.guided import run_guided_cli  # imports this module
 
         return run_guided_cli(args.clarification, args.responses, args.revisit_deferred)
-    return asyncio.run(_run_reassess(args.clarification, args.responses))
+    return asyncio.run(_run_reassess(args.clarification, args.responses, args.research))
 
 
 if __name__ == "__main__":

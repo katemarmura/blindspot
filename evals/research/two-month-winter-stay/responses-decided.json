@@ -1,0 +1,21 @@
+{
+  "clarification_id": "eval-two-month-winter-stay",
+  "instructions": "Fictional evaluation answers. See CHECKLIST.md.",
+  "responses": [
+    {
+      "question_id": "q1",
+      "status": "answered",
+      "answer": "Thailand, from mid-January for about 60 days."
+    },
+    {
+      "question_id": "q2",
+      "status": "answered",
+      "answer": "My temporary residence card is valid for another 14 months."
+    },
+    {
+      "question_id": "q3",
+      "status": "answered",
+      "answer": "Yes, I would keep working remotely for my Polish employer."
+    }
+  ]
+}

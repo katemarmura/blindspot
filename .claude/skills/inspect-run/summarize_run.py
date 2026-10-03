@@ -268,6 +268,8 @@ def summarize_clarification(directory: Path) -> None:
         print("    responses*.json: none found")
 
     clarification_usages = [generation.get("usage")] if generation_called else []
+    for path in sorted(directory.glob("research-*.json")):
+        clarification_usages.append(summarize_research(path))
     for path in sorted(directory.glob("reassessment-*.json")):
         clarification_usages.append(
             summarize_reassessment(path, all_question_ids, known_sources, current)
@@ -284,6 +286,43 @@ def summarize_clarification(directory: Path) -> None:
         f"out {sum(u.get('output_tokens', 0) for u in known)}"
         + (" (INCOMPLETE: some usage unavailable)" if incomplete else "")
     )
+
+
+def _research_used(data: dict[str, Any]) -> str:
+    used = data.get("research")
+    if not isinstance(used, dict):
+        return "research: none supplied"
+    carried = " carried forward from round 1" if used.get("carried_forward_from_round") else ""
+    return (
+        f"research: {used.get('research_id')} ({used.get('research_file')}), "
+        f"sources {used.get('source_ids')}{carried}"
+    )
+
+
+def summarize_research(path: Path) -> Any:
+    """One research artifact: outcome, questions, provenance counts, its own usage."""
+    data = _load(path) or {}
+    tools = data.get("server_tool_usage") or {}
+    print(
+        f"    {path.name}: {data.get('status')} {_usage(data.get('usage'))} "
+        f"searches={tools.get('web_search_requests', 'unknown')} "
+        f"fetches={tools.get('web_fetch_requests', 'unknown')}{_diag(data.get('diagnostics'))}"
+    )
+    print(f"      {_call_diag(data.get('call_diagnostics'))}")
+    sources = data.get("sources") or []
+    print(f"      sources: {[s.get('id') for s in sources]}")
+    outcomes = [f.get("outcome") for f in data.get("fetches") or []]
+    print(f"      fetch outcomes: {outcomes}")
+    for q in data.get("questions") or []:
+        verified = sum(len(f.get("evidence") or []) for f in q.get("supported_findings") or [])
+        rejected = len(q.get("rejected_evidence") or [])
+        missing = len(q.get("missing_information") or [])
+        print(
+            f"      {q.get('id')} [{q.get('status')}; reported {q.get('reported_status')}] "
+            f"findings {q.get('source_finding_ids')} verified quotes {verified}, "
+            f"rejected {rejected}, missing facts {missing}"
+        )
+    return data.get("usage")
 
 
 def summarize_reassessment(
@@ -308,6 +347,7 @@ def summarize_reassessment(
         f"unanswered: {data.get('unanswered_question_ids')}"
     )
     print(f"      {_takeaway_state(data)}")
+    print(f"      {_research_used(data)}")
     round_number = data.get("clarification_round", 1)
     if round_number != 1:
         print(f"      round {round_number}: used responses from every round (tagged by round)")

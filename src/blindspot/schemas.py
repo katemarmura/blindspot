@@ -237,6 +237,10 @@ class RemainingConsideration(BaseModel):
     why_it_matters: str
     source_finding_ids: list[str] = Field(min_length=1)
     question_ids: list[str]
+    # Research source IDs ("s1", ...) supporting this item; only meaningful when a research
+    # artifact was supplied. Omitted from saved JSON when empty, so non-research output is
+    # unchanged. Resolved against that artifact's sources in Python.
+    research_source_ids: list[str] = Field(default_factory=list, exclude_if=lambda v: not v)
 
     @field_validator("title", "observation", "why_it_matters")
     @classmethod
@@ -267,6 +271,10 @@ class AddressedConcern(BaseModel):
     )
     source_finding_ids: list[str] = Field(min_length=1)
     question_ids: list[str] = Field(min_length=1)
+    # Research source IDs ("s1", ...) supporting this item; only meaningful when a research
+    # artifact was supplied. Omitted from saved JSON when empty, so non-research output is
+    # unchanged. Resolved against that artifact's sources in Python.
+    research_source_ids: list[str] = Field(default_factory=list, exclude_if=lambda v: not v)
 
     @field_validator("summary")
     @classmethod
@@ -292,6 +300,10 @@ class UnresolvedUncertainty(BaseModel):
     summary: str
     source_finding_ids: list[str]
     question_ids: list[str]
+    # Research source IDs ("s1", ...) supporting this item; only meaningful when a research
+    # artifact was supplied. Omitted from saved JSON when empty, so non-research output is
+    # unchanged. Resolved against that artifact's sources in Python.
+    research_source_ids: list[str] = Field(default_factory=list, exclude_if=lambda v: not v)
 
     @field_validator("summary")
     @classmethod
@@ -338,6 +350,10 @@ class ConclusionInsight(BaseModel):
     status_explanation: str = Field(
         description="The decisive reported change or remaining gap; omit supporting inventories."
     )
+    # Research source IDs ("s1", ...) supporting this item; only meaningful when a research
+    # artifact was supplied. Omitted from saved JSON when empty, so non-research output is
+    # unchanged. Resolved against that artifact's sources in Python.
+    research_source_ids: list[str] = Field(default_factory=list, exclude_if=lambda v: not v)
 
     @field_validator("blind_spot", "why_it_mattered", "status_explanation")
     @classmethod
@@ -373,3 +389,97 @@ class SavedReassessmentReport(ReassessmentSections):
         cls, value: ConclusionInsight | str | None
     ) -> ConclusionInsight | str | None:
         return _require_nonblank(value) if isinstance(value, str) else value
+
+
+# --- Optional current-source research (model output; verified in Python) ---
+
+
+class ResearchExcerpt(BaseModel):
+    """A verbatim quote the model claims appears on a page it fetched in this request.
+
+    Unverified until Python finds `quote` in that page's retrieved text.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    source_url: str
+    quote: str
+
+    @field_validator("source_url", "quote")
+    @classmethod
+    def _check_nonblank(cls, value: str) -> str:
+        return _require_nonblank(value)
+
+
+class ResearchFinding(BaseModel):
+    """What a source states, the model's interpretation, and the limits on applying it."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    source_statement: str
+    interpretation: str
+    applicability_limits: str
+    excerpts: list[ResearchExcerpt] = Field(min_length=1)
+
+    @field_validator("source_statement", "interpretation", "applicability_limits")
+    @classmethod
+    def _check_nonblank(cls, value: str) -> str:
+        return _require_nonblank(value)
+
+
+class MissingInformation(BaseModel):
+    """A fact about the user that research could not assume."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    fact: str
+    why_needed: str
+
+    @field_validator("fact", "why_needed")
+    @classmethod
+    def _check_nonblank(cls, value: str) -> str:
+        return _require_nonblank(value)
+
+
+ResearchStatus = Literal[
+    "answered", "insufficient_evidence", "conflicting_sources", "needs_user_information"
+]
+
+
+class ResearchQuestion(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    question: str
+    source_finding_ids: list[str] = Field(min_length=1)
+    status: ResearchStatus
+    findings: list[ResearchFinding]
+    missing_information: list[MissingInformation]
+    conflict_notes: list[str]
+
+    @field_validator("question")
+    @classmethod
+    def _check_nonblank(cls, value: str) -> str:
+        return _require_nonblank(value)
+
+    @field_validator("source_finding_ids")
+    @classmethod
+    def _check_sources(cls, value: list[str]) -> list[str]:
+        return _unique_nonblank_ids(value, "source finding IDs")
+
+    @model_validator(mode="after")
+    def _check_status(self) -> "ResearchQuestion":
+        if self.status == "answered" and not self.findings:
+            raise ValueError("an 'answered' research question needs at least one finding")
+        if self.status == "needs_user_information" and not self.missing_information:
+            raise ValueError("'needs_user_information' must list the missing information")
+        if self.status == "conflicting_sources" and not self.conflict_notes:
+            raise ValueError("'conflicting_sources' must describe the conflict")
+        return self
+
+
+class ResearchReport(BaseModel):
+    """The research call's final JSON object: at most three research questions."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    questions: list[ResearchQuestion] = Field(min_length=0, max_length=3)

@@ -48,6 +48,7 @@ Artifact formats:
 | | `result.json` | Final: `experts`, `sources`, `synthesis`, `total_usage`. |
 | Clarification | `runs/team-*/clarify-*/clarification.json` | Plan, experts, `sources`, `synthesis`, `questions`, `question_generation`. |
 | | `responses.json` | The user's responses, edited by hand or by the guided `answer` command (which may use another file via `--responses` and leave entries `null` or `deferred`). They may change after a reassessment; each reassessment's `responses_file` names the one it used. |
+| | `research-*.json` | Optional research. It holds `status`, `lineage`, `input_snapshot` (the batch, hashes of the plan, findings, and question wording, and the exact answers used), `questions[]`, `sources[]`, `searches[]` (queries), `fetches[]` (outcomes), `usage`, `server_tool_usage`, `call_diagnostics`, and `settings.limits`. Each question has `status` / `reported_status`, `supported_findings[].evidence` (verified quotes with `source_id`), `missing_information`, `conflict_notes`, `limitations`, and `rejected_evidence`. A reassessment that used it has a `research` block (with `carried_forward_from_round: 1` when a round-2 batch carried round-1 research, which that batch stores as `prior_research`), and its items cite `research_source_ids`. |
 | Follow-up (round 2) | `runs/team-*/clarify-*/clarification.json` with `round: 2` | `previous` lineage (round-1 batch and reassessment), plus copies of `prior_questions`, `prior_responses`, `prior_unanswered_question_ids`, and `prior_reassessment`. `questions` holds only the new ones (`q4`…). The helper prints `FOLLOW-UP ROUND 2`. |
 | | its `reassessment-*.json` | `clarification_round: 2`. `recorded_responses` lists **both rounds**, each tagged with `round`; the response file holds only round 2. |
 | Evaluation copy | `runs/evals/clarify-*/` | A copy of a committed fixture from `evals/`: `clarification.json` with no question-generation call, several `responses-*.json`, and the reassessments made from them. Use that fixture's `CHECKLIST.md`. |
@@ -103,6 +104,18 @@ is not a defect.
 
 After a zero-question follow-up, the preceding reassessment is the conclusion available;
 open items in it are still open.
+
+**Research.** If a `research-*.json` exists, check:
+- that its queries are minimal;
+- that sources are official where possible;
+- that each verified quote supports its `source_statement`;
+- that `interpretation` and `applicability_limits` don't overreach;
+- that missing facts were recorded rather than guessed.
+
+In a researched reassessment, every cited `research_source_ids` should support the item. A
+research failure or `insufficient_evidence` must never be read as "no concerns". Quote
+verification proves only that the text was retrieved, not that the rule is current or
+correctly applied.
 
 Structural success is not content quality. Valid JSON, a passing schema, and resolving IDs show traceability, not that a rewritten finding faithfully represents its sources or that its claims are true.
 

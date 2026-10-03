@@ -289,6 +289,54 @@ What exists:
 
     The rules stay general, with no domain-specific wording. Judge prompt changes with the
     manual fixture in `evals/reassessment/` (its `CHECKLIST.md`), not with mocked tests.
+  - **Optional research (`research.py`, `python -m blindspot.research`):**
+    - **Integration:** opt-in. It uses Anthropic server tools (`web_search_20250305`,
+      `web_fetch_20250910`) in ONE request on the existing key and model; no new
+      dependency or credential. The research call requests a final JSON object and
+      validates it locally against `ResearchReport` (`schemas.py`). It doesn't use
+      `output_config`, because the docs don't state compatibility with server tools.
+    - **Limits (`LIMITS`):** 3 questions, 4 searches, 4 fetches (`max_uses`, rechecked from
+      the response blocks), about 6,000 fetched tokens per page (provider-controlled and
+      approximate; PDFs uncapped), 8,000 output tokens, a 180 s timeout, `max_retries=0`.
+      `pause_turn`, refusal, and truncation are failures, never continued.
+    - **Provenance (`collect` and `verify`):**
+      - Only fetched public HTTP(S) plain-text pages become sources (`s1`…). PDFs are
+        "unverifiable" and non-public URLs are rejected.
+      - A quote must be found in the page's first `MAX_VERIFY_CHARS` after whitespace
+        collapsing only.
+      - Quotes that don't match, unfetched URLs, overlong quotes, and excess excerpts go to
+        `rejected_evidence`, with no quote text or URL kept.
+      - A question with no verified finding is downgraded to `insufficient_evidence`, and
+        unknown finding IDs fail the stage.
+      - Page text isn't stored.
+    - **Safety and lineage:** charges are confirmed interactively unless `--yes` is given.
+      Credentials load only after the inputs validate. `answers_snapshot()` (in
+      `clarification.py`) is saved as `input_snapshot`: batch ID and round, `plan_sha256`,
+      `findings_sha256` (every expert's assignment and report), `question_ids`,
+      `questions_sha256` (full questions of every round), and the recorded answers verbatim.
+      Hashes use sorted-key compact JSON; a mismatch message names the differing parts.
+    - **Use in reassessment (`reassess --research`):**
+      - `load_research_evidence` rejects a failed file, a snapshot mismatch, or inconsistent
+        source IDs before any call.
+      - The input gains a labelled evidence section.
+      - Report items and `ConclusionInsight` gained an optional `research_source_ids`
+        (omitted from JSON when empty, via `exclude_if`). `_reassessment_reference_issues`
+        checks it against the research sources, and rejects any citation when no research
+        was supplied.
+      - The saved reassessment gets a `research` block (`ResearchEvidence.link()`) only when
+        research was used.
+    - **Follow-up lineage:** `load_followup_source` reads the reassessment's `research`
+      block, reloads the file (`_followup_research`), re-runs `load_research_evidence`
+      against the batch and that reassessment's recorded responses, and requires the same
+      research ID and source IDs. Report citations are then checked against it. Any failure
+      refuses the follow-up before any call or directory. The evidence goes into the
+      follow-up input, and the round-2 artifact stores it as `prior_research`
+      (`ResearchContent`, omitted when None). The artifact validator requires that it covers
+      every research citation in `prior_reassessment`. Round-2 `reassess` uses it
+      automatically (`carried_forward=True`), and both `reassess --research` and
+      `run_research` refuse such a batch.
+    - **Tests and evals:** `tests/test_research.py` uses real SDK block types in fake
+      responses. The manual case is `evals/research/two-month-winter-stay/`.
   - **`answer --clarification … [--responses …] [--revisit-deferred]` (`guided.py`):**
     guided, one-question-at-a-time answering of a round-1 or round-2 batch.
     - **Input and output:** a small `Terminal` protocol with `ask` and `say`. `StdTerminal`

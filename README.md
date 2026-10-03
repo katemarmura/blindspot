@@ -456,6 +456,85 @@ never formats, auto-fixes, or rewrites `uv.lock` (an out-of-date lockfile makes 
 It makes no API calls. Every check runs even if an earlier one fails; failures are listed at
 the end, and the exit code is nonzero.
 
+### Optional current-source research (manual, opt-in, billable)
+
+When a concern depends on external facts that change, such as entry rules, permitted
+stays, or official requirements, you can run **one** bounded research step over a
+clarification batch and its recorded answers, then feed the result into reassessment. The
+default workflow doesn't change; nothing researches unless you ask.
+
+```bash
+# 1. Research (asks you to confirm the charges first; --yes skips the prompt)
+uv run python -m blindspot.research \
+  --clarification runs/team-<id>/clarify-<id>/clarification.json \
+  [--responses runs/team-<id>/clarify-<id>/responses.json] [--allowed-domain gov.example]
+
+# 2. Reassess with the evidence (one more request)
+uv run python -m blindspot.clarification reassess \
+  --clarification runs/team-<id>/clarify-<id>/clarification.json \
+  --responses runs/team-<id>/clarify-<id>/responses.json \
+  --research runs/team-<id>/clarify-<id>/research-<id>.json
+```
+
+- **How it works.** It uses Anthropic's server-side web search and web fetch tools, inside
+  one API request, with your existing `ANTHROPIC_API_KEY` and `ANTHROPIC_MODEL`. There's no
+  extra credential or dependency. The fetching happens on Anthropic's servers: it only
+  fetches URLs already in the conversation and refuses private addresses (per Anthropic's
+  docs). Blindspot also drops any non-public or non-HTTP(S) source. It's read-only: no
+  forms, logins, or bookings.
+- **Limits and cost:**
+  - at most 3 research questions;
+  - 4 searches (Anthropic lists $10 per 1,000 searches, so at most $0.04);
+  - 4 page fetches (no separate charge; fetched text counts as input tokens, about 6,000
+    tokens per page, approximate, and PDFs aren't capped);
+  - 8,000 output tokens and a 180 s timeout;
+  - one request, with no retries, no continuation after a pause, and no repair.
+
+  Search and fetch counts are enforced by Anthropic (`max_uses`) and checked again by
+  Blindspot.
+- **Evidence:**
+  - Every quote must appear (allowing only whitespace differences) in the text of a page
+    fetched in that request. Quotes that don't match, URLs that were never fetched, overlong
+    quotes, PDFs, and non-public pages are recorded as rejected, never used as evidence.
+  - Search snippets alone are never evidence.
+  - A question missing an essential fact about you (destination, dates, nationality, work
+    plans) is recorded as `needs_user_information` rather than guessed.
+  - Conflicts and thin evidence stay visible.
+- **The saved `research-<id>.json`** (next to the batch; nothing else is modified) records:
+  - its lineage, and a snapshot of exactly what it was made from: the batch and round,
+    hashes of the plan, the expert findings, and the full question wording, and the
+    recorded answers;
+  - questions tied to finding IDs;
+  - sources (ID, URL, title, retrieval time, and `page_age` only when the search provider
+    gave one);
+  - verified quotes, with what the source states kept apart from the interpretation and the
+    applicability limits;
+  - missing information, conflicts, rejections, and fetch outcomes;
+  - settings, the prompt, limits, usage, and diagnostics.
+
+  It doesn't store page text. Retrieval time is not proof that a rule is current, and a
+  valid source ID shows traceability, not a faithful interpretation.
+- **Reassessment with `--research`:**
+  - It accepts the file only if it succeeded and its snapshot matches this batch exactly
+    (plan, findings, question wording, and recorded answers); otherwise it's rejected before
+    any call, and the error names what differs.
+  - Report items and the takeaway cite `research_source_ids`, which are checked against
+    that file.
+  - A failed or insufficient research result is never read as "no concerns".
+  - Without `--research`, reassessment and its JSON are unchanged.
+- **Follow-up after a researched reassessment:**
+  - `followup` reloads the research that reassessment used and re-checks it against the
+    batch and the answers that reassessment recorded. If the file is missing, replaced, or
+    stale, the follow-up is refused before any call.
+  - The question generator receives that evidence. The round-2 batch keeps a copy as
+    `prior_research`, so its round-1 citations keep their evidence.
+  - Round-2 reassessment includes the carried research automatically, labelled as made for
+    the round-1 answers. Its `research` block shows `carried_forward_from_round: 1`.
+  - A second research artifact for such a batch isn't supported yet: `research` and
+    `reassess --research` refuse it before any request.
+
+A fictional manual check lives in `evals/research/two-month-winter-stay/`.
+
 ### Follow-up round quality check (manual, live)
 
 `evals/followup/kitten-after-first-round/` is a small **fictional** case: a round-1 batch
@@ -574,6 +653,7 @@ src/blindspot/team.py      # perspective catalogue + one-call team selector
 src/blindspot/synthesis.py # source IDs + one-call synthesis (auto-team only)
 src/blindspot/runs.py      # shared helpers for saving results under runs/
 src/blindspot/clarification.py  # clarification: prepare, reassess, one follow-up round
+src/blindspot/research.py  # optional, bounded current-source research (web search + fetch)
 src/blindspot/llm_smoke.py  # connection smoke-check CLI
 tests/                   # pytest suite
 docs/                    # design notes and the original project brief

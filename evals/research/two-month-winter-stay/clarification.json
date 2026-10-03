@@ -1,0 +1,117 @@
+{
+  "clarification_id": "eval-two-month-winter-stay",
+  "created_at": "2026-10-01T00:00:00+00:00",
+  "status": "success",
+  "source_run": {
+    "directory": "(fictional evaluation fixture)",
+    "run_id": "eval-two-month-winter-stay"
+  },
+  "plan": "FICTIONAL EVALUATION FIXTURE. I hold a Ukrainian passport and live in Poland on a temporary residence card. I'm considering spending about two months this winter in Thailand or Indonesia, then returning to Poland.",
+  "experts": [
+    {
+      "position": 1,
+      "assignment": {
+        "perspective": "Legal & Regulatory",
+        "objective": "Entry, permitted stay, and work conditions for the planned stay.",
+        "questions": [
+          "What entry conditions apply?"
+        ]
+      },
+      "report": {
+        "findings": [
+          {
+            "title": "Permitted stay may be shorter than two months",
+            "observation": "Depending on the destination and the traveller's nationality, the visa-free or visa-on-arrival period may be shorter than the planned two months.",
+            "why_it_matters": "Staying longer than permitted could lead to fines, removal, or future entry bans.",
+            "assumptions": [
+              "The traveller does not hold a visa for a longer stay"
+            ],
+            "question_to_check": "(see clarification)"
+          },
+          {
+            "title": "Remote work during a visitor stay may be restricted",
+            "observation": "If the traveller works remotely while abroad, visitor or tourist status may not permit it, depending on the destination's rules.",
+            "why_it_matters": "Working without the right status could breach immigration conditions.",
+            "assumptions": [
+              "The traveller intends to work during the stay"
+            ],
+            "question_to_check": "(see clarification)"
+          }
+        ]
+      }
+    },
+    {
+      "position": 2,
+      "assignment": {
+        "perspective": "Travel & Mobility",
+        "objective": "Returning to the country of residence after the stay.",
+        "questions": [
+          "What affects the return journey?"
+        ]
+      },
+      "report": {
+        "findings": [
+          {
+            "title": "Return depends on residence card validity",
+            "observation": "If the residence card expires or loses validity during the trip, returning to the country of residence could be harder.",
+            "why_it_matters": "The traveller could be refused re-entry or need a visa to return.",
+            "assumptions": [
+              "The residence card's validity covers the return date"
+            ],
+            "question_to_check": "(see clarification)"
+          }
+        ]
+      }
+    }
+  ],
+  "synthesis": null,
+  "sources": {
+    "e1-f1": {
+      "expert_position": 1,
+      "perspective": "Legal & Regulatory",
+      "finding_position": 1,
+      "title": "Permitted stay may be shorter than two months"
+    },
+    "e1-f2": {
+      "expert_position": 1,
+      "perspective": "Legal & Regulatory",
+      "finding_position": 2,
+      "title": "Remote work during a visitor stay may be restricted"
+    },
+    "e2-f1": {
+      "expert_position": 2,
+      "perspective": "Travel & Mobility",
+      "finding_position": 1,
+      "title": "Return depends on residence card validity"
+    }
+  },
+  "questions": [
+    {
+      "question": "Which destination, and roughly which dates, are you planning?",
+      "why_it_matters": "Entry and stay rules depend on the destination and timing.",
+      "source_finding_ids": [
+        "e1-f1"
+      ],
+      "id": "q1"
+    },
+    {
+      "question": "Until when is your residence card valid?",
+      "why_it_matters": "It determines whether you can return without a new visa.",
+      "source_finding_ids": [
+        "e2-f1"
+      ],
+      "id": "q2"
+    },
+    {
+      "question": "Will you work during the stay, and for whom?",
+      "why_it_matters": "Work may not be allowed under visitor status.",
+      "source_finding_ids": [
+        "e1-f2"
+      ],
+      "id": "q3"
+    }
+  ],
+  "question_generation": {
+    "note": "Fictional evaluation fixture written by hand; no model call was made."
+  }
+}

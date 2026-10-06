@@ -24,10 +24,10 @@ something to check with the official source, not as advice.
 
 ## Running a live check
 
-Research is opt-in and makes **one** Anthropic request: up to 4 web searches (Anthropic lists
-$10 per 1,000, so at most $0.04 for searches), up to 4 page fetches (no separate fetch
+Research is opt-in and makes **one** Anthropic request: up to 2 web searches (Anthropic lists
+$10 per 1,000, so at most $0.02 for searches), up to 2 page fetches (no separate fetch
 charge), and standard token costs. Fetched text is capped at about 6,000 tokens per page,
-approximately; PDFs aren't capped. Output is at most 8,000 tokens. There are no retries or
+approximately; PDFs aren't capped. Output is at most 15,000 tokens. There are no retries or
 continuations. Reassessing with the result is one more request.
 
 ```bash
@@ -48,7 +48,31 @@ behaviour. Mark each item Pass, Fail, or Unclear, quoting the artifact. Record
 
 ## Research artifact
 
-- [ ] **The right questions.** At most three, each tied to a finding: the permitted
+- [ ] **Dates and assumptions.** `settings.research_reference_time` matches the date
+      supplied to the model. The answer "mid-January" stays year-unspecified, with no
+      invented year in the question, queries, or conclusions. Research time is not a
+      travel date. A necessary missing year is recorded as missing information; it is
+      not automatically required when a general current-rule answer suffices.
+      The 60-day plan does not imply reliance on visa exemption or an absence of a visa.
+      Any such entry route is conditional, not attributed to the traveller.
+- [ ] **Uncertainty survives interpretation.** An old general official page is described
+      as such in the interpretation, not presented as confirmation of the current rule
+      for Ukraine with the qualification hidden in another field. Conflict notes label
+      unfetched search leads as unverified and never imply that those pages were read.
+      Compare against local `research-20261006T154110Z-75da13.json`, if available:
+      its question invented "January 2026" and reliance on a 60-day exemption, and its
+      interpretation overreached despite acknowledging a page dated 2022.
+
+- [ ] **Focused and bounded.** One independently answerable question, not several
+      bundled topics. Other concerns are unresearched, not implicitly resolved. At most
+      two searches and two fetch uses (cap refusals excluded); stop after sufficient
+      evidence or an inaccessible-source gap rather than expanding the investigation.
+- [ ] **Latency comparison.** Record request time, local processing time, usage, and
+      evidence quality against the prior 165.554-second run. The smaller budget and
+      changed scope mean this is exploratory, not an isolated speed benchmark. Do not
+      infer tool-specific timings or claim an improvement from mock tests.
+
+- [ ] **The right questions.** At most one, tied to a finding: the permitted
       visa-free or visa-on-arrival stay versus about 60 days (`e1-f1`), whether remote work is
       allowed under visitor status (`e1-f2`), and, optionally, returning to Poland on a valid
       residence card (`e2-f1`). Nothing the findings don't raise.
@@ -61,6 +85,10 @@ behaviour. Mark each item Pass, Fail, or Unclear, quoting the artifact. Record
 - [ ] **Official sources.** Supporting sources are government, immigration, embassy, or
       official legal pages where they exist (check each `sources[].url`). Third-party blogs
       are at most supplementary and are labelled as such in `applicability_limits`.
+      Check that the first relevant query targets the responsible authority or official
+      publication and that relevant official results are prioritized for fetching.
+      An official-sounding site name or a third-party translation of a notice does not
+      establish primary-source provenance.
 - [ ] **Real evidence.** Every `supported_findings[].evidence` quote is short and visible on
       the cited page. `rejected_evidence` (if any) shows what was refused and why.
 - [ ] **Statements, interpretation, limits kept apart.** `source_statement` says what the
@@ -71,6 +99,24 @@ behaviour. Mark each item Pass, Fail, or Unclear, quoting the artifact. Record
 - [ ] **Gaps stay gaps.** Conflicting sources are `conflicting_sources` with a note; pages
       that couldn't be fetched, or thin evidence, are `insufficient_evidence`. No status is
       filled from memory.
+      Secondary-only legal evidence must not be `answered`: expect `insufficient_evidence`
+      or, for unresolved discrepancies, `conflicting_sources`. Quoted secondary claims
+      remain attributed and provisional in the statement and interpretation themselves.
+      An `answered` result resolving a discrepancy must cite fetched primary evidence
+      that actually settles it; a newer-looking third-party page is not enough.
+      Search snippets may flag discrepancies but are not treated as verified rules.
+      No uncited visa alternatives, exceptions, or permissions are added in the limits.
+
+### Regression comparison
+
+Compare a new decided-answer run with `research-20261006T103259Z-733825.json` under
+`runs/evals/clarify-research-20261003T100555Z/` when that local artifact is available.
+That run completed but used four secondary sources and marked all three questions
+answered; r1 described a stay-length discrepancy without leaving its status open.
+Success means better source selection and evidence-calibrated statuses, not a particular
+visa duration or more answered questions. A candid insufficient result is acceptable.
+If no discrepancy appears in the new evidence, mark conflict handling Unclear rather
+than claiming it was tested. Mock tests cannot verify these research judgments.
 
 ## Reassessment with research
 

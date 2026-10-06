@@ -422,6 +422,9 @@ def _research_lines(s: Session) -> list[str]:
             f"  research {path.name}: {data.get('status')} {_usage(data.get('usage'))} "
             f"searches={tools.get('web_search_requests', 'unknown')} "
             f"fetches={tools.get('web_fetch_requests', 'unknown')}"
+            f"; timings (seconds): {data.get('timings', 'unavailable')}"
+            f"; research reference: "
+            f"{(data.get('settings') or {}).get('research_reference_time', 'unavailable')}"
         )
     return lines
 

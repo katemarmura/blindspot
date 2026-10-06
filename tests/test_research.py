@@ -33,6 +33,7 @@ from anthropic.types import (
     WebFetchToolResultErrorCode,
     WebSearchResultBlock,
     WebSearchToolResultBlock,
+    WebSearchToolResultError,
 )
 
 from blindspot import clarification, research
@@ -325,6 +326,72 @@ def _digest(directory: Path) -> dict[str, str]:
 # --- Research: success, provenance, budgets ---
 
 
+def test_research_reference_time_is_sent_and_saved_without_changing_answers(
+    tmp_path: Path, fake: _Fake, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    artifact, responses = _batch(tmp_path, fake)
+    before = responses.read_bytes()
+    reference = "2026-10-06T15:00:00+00:00"
+    monkeypatch.setattr(research, "utc_now", lambda: reference)
+    fake.outcomes.append(_research_message(_GOOD_BLOCKS, {"questions": [_question()]}))
+
+    run = _run(artifact, responses)
+
+    assert run.data["status"] == "completed"
+    assert run.data["settings"]["research_reference_time"] == reference
+    assert fake.calls[0]["messages"][0]["content"].startswith(
+        f"Research reference time (UTC): {reference}\n"
+    )
+    assert responses.read_bytes() == before
+    batch = clarification.load_artifact(artifact)
+    assert run.data["input_snapshot"] == clarification.answers_snapshot(
+        batch, clarification.load_responses(responses, batch)
+    )
+
+
+@pytest.mark.parametrize("count", [0, 1, 2])
+def test_live_question_limit_and_timings(
+    tmp_path: Path, fake: _Fake, monkeypatch: pytest.MonkeyPatch, count: int
+) -> None:
+    artifact, responses = _batch(tmp_path, fake)
+    fake.outcomes.append(_research_message(_GOOD_BLOCKS, {"questions": [_question()] * count}))
+
+    # Avoid patching global time.monotonic, which asyncio also uses.
+    class Clock:
+        def __init__(self) -> None:
+            self.values = iter([10.0, 15.0, 15.0, 15.25])
+
+        def monotonic(self) -> float:
+            return next(self.values)
+
+    monkeypatch.setattr(research, "time", Clock())
+    run = _run(artifact, responses)
+    assert run.data["status"] == ("completed" if count <= 1 else "failed")
+    if count == 2:
+        assert "more than 1 question" in run.data["error"]
+    assert run.data["timings"] == {"request_seconds": 5.0, "local_processing_seconds": 0.25}
+    assert run.data["settings"]["limits"]["max_research_questions"] == 1
+    assert "at most 1 question, 2 searches, 2 fetches" in fake.calls[0]["messages"][0]["content"]
+    assert len(fake.calls) == 1
+
+
+@pytest.mark.parametrize("tool", ["web_search", "web_fetch"])
+def test_third_tool_use_exceeds_new_budget(tmp_path: Path, fake: _Fake, tool: str) -> None:
+    artifact, responses = _batch(tmp_path, fake)
+    blocks: list[ContentBlock] = []
+    for i in range(3):
+        blocks += (
+            _search(f"t{i}", "query", [])
+            if tool == "web_search"
+            else _fetch(f"t{i}", _OFFICIAL, _PAGE)
+        )
+    fake.outcomes.append(_research_message(blocks, {"questions": []}))
+    run = _run(artifact, responses)
+    assert run.data["status"] == "failed"
+    assert "exceeded its budget" in run.data["error"]
+    assert len(fake.calls) == 1
+
+
 def test_successful_research_records_verified_provenance_and_budgets(
     tmp_path: Path, fake: _Fake
 ) -> None:
@@ -336,13 +403,13 @@ def test_successful_research_records_verified_provenance_and_budgets(
 
     # One request, with provider-enforced caps and the application's own limits.
     (call,) = fake.calls
-    assert call["max_tokens"] == research.MAX_OUTPUT_TOKENS == 8000
+    assert call["max_tokens"] == research.MAX_OUTPUT_TOKENS == 15000
     search_tool, fetch_tool = call["tools"]
-    assert search_tool == {"type": "web_search_20250305", "name": "web_search", "max_uses": 4}
+    assert search_tool == {"type": "web_search_20250305", "name": "web_search", "max_uses": 2}
     assert fetch_tool == {
         "type": "web_fetch_20250910",
         "name": "web_fetch",
-        "max_uses": 4,
+        "max_uses": 2,
         "max_content_tokens": 6000,
     }
     assert fake.clients == [{"api_key": "dummy-test-key", "timeout": 180.0, "max_retries": 0}]
@@ -399,6 +466,81 @@ def test_budget_overrun_reported_by_the_response_fails_the_stage(
     assert "exceeded its budget (5 searches, 0 fetches)" in run.data["error"]
     assert run.data["questions"] == []
     assert len(fake.calls) == 1  # never retried
+
+
+@pytest.mark.parametrize("tool", ["web_search", "web_fetch"])
+def test_usage_cap_rejection_preserves_verified_report(
+    tmp_path: Path, fake: _Fake, tool: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Retain the original four-use live failure as a regression fixture.
+    monkeypatch.setattr(research, "MAX_SEARCHES", 4)
+    monkeypatch.setattr(research, "MAX_FETCHES", 4)
+    artifact, responses = _batch(tmp_path, fake)
+    blocks = list(_GOOD_BLOCKS)
+    if tool == "web_fetch":
+        # Mirror the live failure: two pages, two ordinary failures, then a refusal.
+        blocks += _fetch("f2", _OFFICIAL, _PAGE)
+        blocks += _fetch("f3", _OFFICIAL, None, error="url_not_allowed")
+        blocks += _fetch("f4", _OFFICIAL, None, error="url_not_in_prior_context")
+        blocks += _fetch("f5", _OFFICIAL, None, error="max_uses_exceeded")
+    else:
+        for i in range(2, 5):
+            blocks += _search(f"s{i}", "query", [])
+        blocks += [
+            ServerToolUseBlock(
+                id="s5", name="web_search", input={"query": "query"}, type="server_tool_use"
+            ),
+            WebSearchToolResultBlock(
+                tool_use_id="s5",
+                type="web_search_tool_result",
+                content=WebSearchToolResultError(
+                    type="web_search_tool_result_error", error_code="max_uses_exceeded"
+                ),
+            ),
+        ]
+    fake.outcomes.append(
+        _research_message(
+            blocks,
+            {"questions": [_question()]},
+            searches=5 if tool == "web_search" else 1,
+            fetches=5 if tool == "web_fetch" else 1,
+        )
+    )
+
+    run = _run(artifact, responses)
+
+    assert run.data["status"] == "completed"
+    assert run.data["questions"][0]["supported_findings"][0]["evidence"]
+    outcomes = run.data["fetches" if tool == "web_fetch" else "searches"]
+    assert outcomes[-1]["outcome"] == "error:max_uses_exceeded"
+    assert run.data["server_tool_usage"][f"{tool}_requests"] == 5
+    assert len(fake.calls) == 1
+
+
+@pytest.mark.parametrize("last_result", ["success", "ordinary_failure", "missing", "wrong_id"])
+def test_fetch_overrun_is_not_hidden_by_other_results(
+    tmp_path: Path, fake: _Fake, last_result: str
+) -> None:
+    artifact, responses = _batch(tmp_path, fake)
+    blocks: list[ContentBlock] = []
+    for i in range(4):
+        blocks += _fetch(f"f{i}", _OFFICIAL, _PAGE)
+    last = _fetch("f4", _OFFICIAL, _PAGE)
+    if last_result == "ordinary_failure":
+        last = _fetch("f4", _OFFICIAL, None, error="url_not_accessible")
+    elif last_result == "missing":
+        last = last[:1]
+    elif last_result == "wrong_id":
+        last = last[:1] + _fetch("unrelated", _OFFICIAL, None, error="max_uses_exceeded")[1:]
+    blocks += last
+    fake.outcomes.append(_research_message(blocks, {"questions": [_question()]}, fetches=5))
+
+    run = _run(artifact, responses)
+
+    assert run.data["status"] == "failed"
+    assert "exceeded its budget (0 searches, 5 fetches)" in run.data["error"]
+    assert run.data["questions"] == []
+    assert len(fake.calls) == 1
 
 
 def test_quote_beyond_the_verification_window_is_rejected(tmp_path: Path, fake: _Fake) -> None:
@@ -485,6 +627,120 @@ def test_unsupported_evidence_is_rejected_and_status_downgraded(
     assert "made-up.example" not in text and "90 days" not in text  # unverified content not kept
 
 
+@pytest.mark.parametrize("omit", [True, False], ids=["missing", "empty"])
+@pytest.mark.parametrize("keep_supported", [True, False], ids=["mixed", "unsupported-only"])
+def test_missing_excerpts_reject_only_the_unsupported_finding(
+    tmp_path: Path,
+    fake: _Fake,
+    omit: bool,
+    keep_supported: bool,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Exercise legacy multi-question evidence handling independently of the live cap.
+    monkeypatch.setattr(research, "MAX_RESEARCH_QUESTIONS", 3)
+    artifact, responses = _batch(tmp_path, fake)
+    q = _question()
+    unsupported = _question()["findings"][0]
+    unsupported["source_statement"] = "UNSUPPORTED CLAIM MUST NOT SURVIVE"
+    if omit:
+        del unsupported["excerpts"]
+    else:
+        unsupported["excerpts"] = []
+    q["findings"] = [unsupported] + (q["findings"] if keep_supported else [])
+    # Another valid question must survive even if the first loses every finding.
+    fake.outcomes.append(_research_message(_GOOD_BLOCKS, {"questions": [q, _question()]}))
+
+    run = _run(artifact, responses)
+
+    assert run.data["status"] == "completed"
+    first, second = run.data["questions"]
+    assert first["reported_status"] == "answered"
+    assert first["status"] == ("answered" if keep_supported else "insufficient_evidence")
+    assert len(first["supported_findings"]) == int(keep_supported)
+    assert first["rejected_evidence"] == [
+        {"finding": 0, "excerpt": None, "reason": "missing_excerpts", "quote_chars": 0}
+    ]
+    assert second["status"] == "answered"
+    assert second["supported_findings"][0]["evidence"]
+    assert "UNSUPPORTED CLAIM MUST NOT SURVIVE" not in run.path.read_text()
+    assert len(fake.calls) == 1
+    # The completed artifact remains consumable by reassessment.
+    batch = clarification.load_artifact(artifact)
+    clarification.load_research_evidence(
+        run.path, batch, clarification.load_responses(responses, batch)
+    )
+
+
+@pytest.mark.parametrize("excerpts", [None, "not a list", [{}]])
+def test_malformed_excerpts_still_fail_schema_validation(
+    tmp_path: Path, fake: _Fake, excerpts: Any
+) -> None:
+    artifact, responses = _batch(tmp_path, fake)
+    q = _question()
+    q["findings"][0]["excerpts"] = excerpts
+    fake.outcomes.append(_research_message(_GOOD_BLOCKS, {"questions": [q]}))
+    run = _run(artifact, responses)
+    assert run.data["status"] == "failed"
+    assert "invalid" in run.data["error"]
+    assert run.data["questions"] == []
+    assert len(fake.calls) == 1
+
+
+@pytest.mark.parametrize(
+    "status", ["answered", "insufficient_evidence", "needs_user_information", "conflicting_sources"]
+)
+def test_omitted_inapplicable_lists_are_accepted(tmp_path: Path, fake: _Fake, status: str) -> None:
+    artifact, responses = _batch(tmp_path, fake)
+    q = _question(status=status)
+    del q["missing_information"], q["conflict_notes"]
+    if status in ("insufficient_evidence", "needs_user_information"):
+        del q["findings"]
+    if status == "needs_user_information":
+        q["missing_information"] = [{"fact": "Passport type", "why_needed": "Rule applicability"}]
+    if status == "conflicting_sources":
+        q["conflict_notes"] = ["Sources describe different durations."]
+    fake.outcomes.append(_research_message(_GOOD_BLOCKS, {"questions": [q]}))
+
+    run = _run(artifact, responses)
+
+    assert run.data["status"] == "completed"
+    question = run.data["questions"][0]
+    assert question["status"] == status
+    assert question["missing_information"] == q.get("missing_information", [])
+    assert question["conflict_notes"] == q.get("conflict_notes", [])
+    assert bool(question["supported_findings"]) == bool(q.get("findings"))
+    assert len(fake.calls) == 1
+    batch = clarification.load_artifact(artifact)
+    clarification.load_research_evidence(
+        run.path, batch, clarification.load_responses(responses, batch)
+    )
+
+
+@pytest.mark.parametrize(
+    ("status", "field"),
+    [
+        ("answered", "findings"),
+        ("needs_user_information", "missing_information"),
+        ("conflicting_sources", "conflict_notes"),
+    ],
+)
+@pytest.mark.parametrize("value", ["omit", [], None, "invalid"])
+def test_status_required_lists_cannot_be_missing_empty_or_malformed(
+    tmp_path: Path, fake: _Fake, status: str, field: str, value: Any
+) -> None:
+    artifact, responses = _batch(tmp_path, fake)
+    q = _question(status=status)
+    if value == "omit":
+        del q[field]
+    else:
+        q[field] = value
+    fake.outcomes.append(_research_message(_GOOD_BLOCKS, {"questions": [q]}))
+    run = _run(artifact, responses)
+    assert run.data["status"] == "failed"
+    assert "invalid" in run.data["error"]
+    assert len(fake.calls) == 1
+
+
 def test_search_snippet_alone_is_not_evidence(tmp_path: Path, fake: _Fake) -> None:
     artifact, responses = _batch(tmp_path, fake)
     blocks = _search("t1", "q", [_OFFICIAL])  # found but never fetched
@@ -523,7 +779,11 @@ def test_conflicting_sources_are_preserved(tmp_path: Path, fake: _Fake) -> None:
     assert [f["evidence"][0]["source_id"] for f in question["supported_findings"]] == ["s1", "s2"]
 
 
-def test_inaccessible_binary_and_non_public_pages_are_recorded(tmp_path: Path, fake: _Fake) -> None:
+def test_inaccessible_binary_and_non_public_pages_are_recorded(
+    tmp_path: Path, fake: _Fake, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Exercise all four legacy outcomes together, independently of the live budget.
+    monkeypatch.setattr(research, "MAX_FETCHES", 4)
     artifact, responses = _batch(tmp_path, fake)
     blocks = [
         *_fetch("t1", "https://gov.example/down", None, error="url_not_accessible"),
@@ -611,6 +871,8 @@ def test_research_failures_are_saved_as_failed_with_honest_usage(
     assert match in data["error"]
     assert data["questions"] == []
     if isinstance(outcome, BaseException):
+        assert data["timings"]["local_processing_seconds"] is None
+        assert data["timings"]["request_seconds"] >= 0
         assert data["usage"]["usage_incomplete"] is True
         assert data["server_tool_usage"] is None
         assert data["call_diagnostics"]["response_received"] is False

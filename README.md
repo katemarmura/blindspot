@@ -483,20 +483,37 @@ uv run python -m blindspot.clarification reassess \
   docs). Blindspot also drops any non-public or non-HTTP(S) source. It's read-only: no
   forms, logins, or bookings.
 - **Limits and cost:**
-  - at most 3 research questions;
-  - 4 searches (Anthropic lists $10 per 1,000 searches, so at most $0.04);
-  - 4 page fetches (no separate charge; fetched text counts as input tokens, about 6,000
+  Research selects one decisive external question per run; other concerns remain
+  unresearched. Saved timings separate the API request from local evidence processing,
+  excluding file writing; provider tool/generation timing is unavailable.
+  A UTC reference time is supplied and saved for each research call. It dates the
+  research, not the user's travel; unspecified dates and arrangements remain uncertain.
+  - at most 1 research question;
+  - 2 searches (Anthropic lists $10 per 1,000 searches, so at most $0.02);
+  - 2 page fetches (no separate charge; fetched text counts as input tokens, about 6,000
     tokens per page, approximate, and PDFs aren't capped);
-  - 8,000 output tokens and a 180 s timeout;
+  - 15,000 output tokens and a 180 s timeout;
   - one request, with no retries, no continuation after a pause, and no repair.
 
   Search and fetch counts are enforced by Anthropic (`max_uses`) and checked again by
-  Blindspot.
+  Blindspot. Ordinary tool failures still count; attempts explicitly refused with
+  `max_uses_exceeded` do not. Those refusals remain in the saved diagnostics, and the
+  final report still goes through schema and evidence validation.
 - **Evidence:**
   - Every quote must appear (allowing only whitespace differences) in the text of a page
     fetched in that request. Quotes that don't match, URLs that were never fetched, overlong
     quotes, PDFs, and non-public pages are recorded as rejected, never used as evidence.
   - Search snippets alone are never evidence.
+  - For legal/administrative questions, the prompt directs research toward official
+    sources first. Secondary-only findings stay provisional, and unresolved conflicts
+    stay open. These judgments require manual review; matching a quote does not verify
+    the publisher's authority or the rule's current applicability.
+  - Omitted research lists default to empty lists. Status-specific details remain
+    required: findings for answered questions, missing facts for `needs_user_information`,
+    and conflict notes for `conflicting_sources`.
+  - Findings with missing or empty excerpts are discarded and recorded as
+    `missing_excerpts`; supported findings survive. An answered question left without
+    verified findings becomes `insufficient_evidence`.
   - A question missing an essential fact about you (destination, dates, nationality, work
     plans) is recorded as `needs_user_information` rather than guessed.
   - Conflicts and thin evidence stay visible.

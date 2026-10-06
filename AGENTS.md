@@ -295,10 +295,19 @@ What exists:
       dependency or credential. The research call requests a final JSON object and
       validates it locally against `ResearchReport` (`schemas.py`). It doesn't use
       `output_config`, because the docs don't state compatibility with server tools.
-    - **Limits (`LIMITS`):** 3 questions, 4 searches, 4 fetches (`max_uses`, rechecked from
+    - **Limits (`LIMITS`):** 1 question, 2 searches, 2 fetches (`max_uses`, rechecked from
       the response blocks), about 6,000 fetched tokens per page (provider-controlled and
-      approximate; PDFs uncapped), 8,000 output tokens, a 180 s timeout, `max_retries=0`.
-      `pause_turn`, refusal, and truncation are failures, never continued.
+      approximate; PDFs uncapped), 15,000 output tokens, a 180 s timeout, `max_retries=0`.
+      `pause_turn`, refusal, and truncation are failures, never continued. The local
+      count excludes only attempts with a matching `max_uses_exceeded` tool result;
+      ordinary failures and attempts with missing results still count. Tool outcomes
+      and provider-reported usage remain unchanged in the saved artifact.
+      New live runs enforce one question; older reports with up to three remain loadable.
+      `timings` separates request time from local processing (null without a response),
+      excluding artifact writing. Provider per-tool/generation timing is unavailable.
+      The input includes a UTC research reference time, saved in
+      `settings.research_reference_time`; this is not a user travel date. Prompt rules
+      preserve unspecified dates/arrangements and source uncertainty in interpretations.
     - **Provenance (`collect` and `verify`):**
       - Only fetched public HTTP(S) plain-text pages become sources (`s1`…). PDFs are
         "unverifiable" and non-public URLs are rejected.
@@ -308,6 +317,11 @@ What exists:
         `rejected_evidence`, with no quote text or URL kept.
       - A question with no verified finding is downgraded to `insufficient_evidence`, and
         unknown finding IDs fail the stage.
+      - Missing or empty `excerpts` reject that finding with `missing_excerpts`, preserving
+        supported findings. Malformed excerpts still fail schema validation.
+      - Omitted `findings`, `missing_information`, and `conflict_notes` default to empty
+        lists. Status-specific requirements still apply: answered needs findings,
+        needs_user_information needs missing facts, and conflicting_sources needs notes.
       - Page text isn't stored.
     - **Safety and lineage:** charges are confirmed interactively unless `--yes` is given.
       Credentials load only after the inputs validate. `answers_snapshot()` (in
@@ -337,6 +351,10 @@ What exists:
       `run_research` refuse such a batch.
     - **Tests and evals:** `tests/test_research.py` uses real SDK block types in fake
       responses. The manual case is `evals/research/two-month-winter-stay/`.
+      The research prompt targets official sources first for legal/administrative claims,
+      keeps secondary-only conclusions provisional, and preserves unresolved conflicts.
+      These are model judgments evaluated with the checklist, not guarantees of the
+      quote verifier or a domain-name classifier.
   - **`answer --clarification … [--responses …] [--revisit-deferred]` (`guided.py`):**
     guided, one-question-at-a-time answering of a round-1 or round-2 batch.
     - **Input and output:** a small `Terminal` protocol with `ask` and `say`. `StdTerminal`

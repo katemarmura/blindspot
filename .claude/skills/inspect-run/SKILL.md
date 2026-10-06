@@ -54,6 +54,14 @@ Artifact formats:
 | Evaluation copy | `runs/evals/clarify-*/` | A copy of a committed fixture from `evals/`: `clarification.json` with no question-generation call, several `responses-*.json`, and the reassessments made from them. Use that fixture's `CHECKLIST.md`. |
 | | `reassessment-*.json` | `recorded_responses` actually used, `unanswered_question_ids`, `report`, `diagnostics`, `usage`, `settings.max_output_tokens`, and `call_diagnostics` (newer files). Newer reports also have a structured `report.takeaway` (`blind_spot`, `why_it_mattered`, `status`, `status_explanation`; `null` only when every section is empty) and top-level `conclusion_status` (`current_assessment` after round 1, `review_conclusion` after round 2, `null` on failure). Older reports may have a prose takeaway or none, and no `conclusion_status`; they're legacy, not invalid. |
 
+Research artifacts may include `timings.request_seconds` (API/client lifetime, including
+provider tools and generation) and `timings.local_processing_seconds` (collection,
+validation, and evidence checks; null if no response arrived). Neither includes artifact
+writing. These are not per-tool timings; older artifacts omit them. New live runs are
+limited to one research question; older reports may contain up to three.
+`settings.research_reference_time` records the UTC reference supplied to research;
+it is not a user-specified travel date. Older artifacts omit it.
+
 Older artifacts lack later fields. Examples:
 - a `result.json` without `sources`/`synthesis` (source IDs are then derived as `e<team position>-f<finding position>` over successful experts);
 - a run with only `team.json` (selection failed or was interrupted);

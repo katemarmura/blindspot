@@ -15,8 +15,8 @@ ANTHROPIC_API_KEY and the configured model. Fetching runs on Anthropic's servers
 which only fetch URLs already present in the conversation and refuse private
 addresses (provider-documented). No browser, forms, logins, or other writes.
 
-Limits (application constants; see `LIMITS`): at most 3 research questions, 4
-searches, 4 fetches, about 6,000 tokens of text per fetched page, 8,000 output
+Limits (application constants; see `LIMITS`): at most 1 research question, 2
+searches, 2 fetches, about 6,000 tokens of text per fetched page, 15,000 output
 tokens, a 180 s timeout, one request, no SDK retries, and no continuation after
 `pause_turn`. Search and fetch counts are enforced by the provider (`max_uses`)
 and re-checked here; the per-page token cap is provider-controlled and approximate.
@@ -77,11 +77,11 @@ from blindspot.runs import git_state, utc_now, write_json
 from blindspot.schemas import ResearchFinding, ResearchReport
 from blindspot.synthesis import build_input
 
-MAX_RESEARCH_QUESTIONS = 3  # also the ResearchReport schema limit
-MAX_SEARCHES = 4  # web_search max_uses (provider-enforced), re-checked here
-MAX_FETCHES = 4  # web_fetch max_uses (provider-enforced), re-checked here
+MAX_RESEARCH_QUESTIONS = 1  # live-run limit; saved reports may have up to three
+MAX_SEARCHES = 2  # web_search max_uses (provider-enforced), re-checked here
+MAX_FETCHES = 2  # web_fetch max_uses (provider-enforced), re-checked here
 MAX_FETCH_CONTENT_TOKENS = 6000  # web_fetch max_content_tokens (provider, approximate)
-MAX_OUTPUT_TOKENS = 8000
+MAX_OUTPUT_TOKENS = 15000
 REQUEST_TIMEOUT_SECONDS = 180.0
 MAX_MODEL_REQUESTS = 1  # no pause_turn continuation, no retries, no repair
 MAX_VERIFY_CHARS = 60_000  # retrieved text considered per page when checking quotes
@@ -301,7 +301,7 @@ def verify(
                 status = "insufficient_evidence"
                 limitations.append(f"Status changed from '{question.status}' for that reason.")
         if rejected:
-            limitations.append(f"{len(rejected)} excerpt(s) rejected; see rejected_evidence.")
+            limitations.append(f"{len(rejected)} evidence rejection(s); see rejected_evidence.")
         questions.append(
             {
                 "id": f"r{qi + 1}",
@@ -324,6 +324,8 @@ def _verify_finding(
 ) -> tuple[list[dict[str, str]], list[dict[str, Any]]]:
     evidence: list[dict[str, str]] = []
     rejected: list[dict[str, Any]] = []
+    if not finding.excerpts:
+        return [], [{"excerpt": None, "reason": "missing_excerpts", "quote_chars": 0}]
     for ei, excerpt in enumerate(finding.excerpts):
         reason = None
         source = found.source_for(excerpt.source_url)
@@ -358,19 +360,25 @@ def _tools(allowed_domains: list[str] | None) -> list[Any]:
     ]
 
 
-def _input(artifact: Any, snapshot: dict[str, Any]) -> str:
+def _input(artifact: Any, snapshot: dict[str, Any], researched_at: str) -> str:
     context = artifact.context()
     questions = [
         {**q.model_dump(), "perspectives": question_perspectives(q, context.sources)}
         for q in artifact.all_questions
     ]
     return (
+        f"Research reference time (UTC): {researched_at}\n"
+        "This dates the research, not the user's plan or travel.\n\n"
         f"{build_input(context.plan, context.experts)}\n\n"
         f"Clarification questions:\n{json.dumps(questions, indent=2, ensure_ascii=False)}\n\n"
         "Recorded responses (reported by the user; not independently verified):\n"
         f"{json.dumps(snapshot['recorded_responses'], indent=2, ensure_ascii=False)}\n\n"
         "Questions without a response:\n"
-        f"{json.dumps(snapshot['unanswered_question_ids'], ensure_ascii=False)}"
+        f"{json.dumps(snapshot['unanswered_question_ids'], ensure_ascii=False)}\n\n"
+        f"Research budget: at most {MAX_RESEARCH_QUESTIONS} question, "
+        f"{MAX_SEARCHES} searches, {MAX_FETCHES} fetches. "
+        "Select the one external fact most likely to change the decision. "
+        "Other concerns remain unresearched, not resolved."
     )
 
 
@@ -408,6 +416,8 @@ async def run_research(
     questions: list[dict[str, Any]] = []
     error: ResearchError | None = None
     server_usage: dict[str, Any] | None = None
+    processing_start: float | None = None
+    researched_at = utc_now()
     start = time.monotonic()
     usage.model_calls += 1
     try:
@@ -419,7 +429,9 @@ async def run_research(
                     model=model,
                     max_tokens=MAX_OUTPUT_TOKENS,
                     system=RESEARCH_SYSTEM_PROMPT,
-                    messages=[{"role": "user", "content": _input(artifact, snapshot)}],
+                    messages=[
+                        {"role": "user", "content": _input(artifact, snapshot, researched_at)}
+                    ],
                     tools=_tools(allowed_domains),
                 )
             except anthropic.APIConnectionError as exc:
@@ -427,6 +439,7 @@ async def run_research(
             except anthropic.APIStatusError as exc:
                 raise ResearchError(f"API error ({exc.status_code}): {exc.message}") from exc
         call.elapsed_seconds = time.monotonic() - start
+        processing_start = time.monotonic()
         usage.record(response)
         call.record_response(response)
         tool_usage = response.usage.server_tool_use
@@ -457,6 +470,12 @@ async def run_research(
                 diagnostics,
             )
         report = _parse_report(found.final_text)
+        if len(report.questions) > MAX_RESEARCH_QUESTIONS:
+            raise ResearchError(
+                f"Research returned more than {MAX_RESEARCH_QUESTIONS} question; "
+                "the extra questions were not silently selected or retried.",
+                diagnostics,
+            )
         questions, issues = verify(report, found, finding_ids)
         if issues:
             raise ResearchError(
@@ -473,6 +492,9 @@ async def run_research(
         error = exc
         questions = []
 
+    processing_seconds = (
+        time.monotonic() - processing_start if processing_start is not None else None
+    )
     research_id = f"{datetime.now(UTC):%Y%m%dT%H%M%SZ}-{secrets.token_hex(3)}"
     path = artifact_path.parent / f"research-{research_id}.json"
     data: dict[str, Any] = {
@@ -498,10 +520,15 @@ async def run_research(
         "usage": _usage_json(usage),
         "server_tool_usage": server_usage,
         "call_diagnostics": call.to_json(),
+        "timings": {
+            "request_seconds": call.elapsed_seconds,
+            "local_processing_seconds": processing_seconds,
+        },
         "settings": {
             "provider": "anthropic server tools (web_search_20250305, web_fetch_20250910)",
             "requested_model": model,
             "system_prompt": RESEARCH_SYSTEM_PROMPT,
+            "research_reference_time": researched_at,
             "allowed_domains": allowed_domains or None,
             "limits": LIMITS,
             "quote_matching": "exact after collapsing whitespace runs to single spaces",
@@ -513,7 +540,24 @@ async def run_research(
 
 
 def _tool_count(response: Message, name: str) -> int:
-    return sum(1 for b in response.content if isinstance(b, ServerToolUseBlock) and b.name == name)
+    """Count attempts except those explicitly refused by the provider's usage cap.
+
+    Ordinary failures still consume a use. Match the result type and tool-use ID
+    so an unrelated rejection cannot hide an overrun; missing results count too.
+    Keep provider usage and collected error outcomes unchanged for diagnostics.
+    """
+    result_type = WebSearchToolResultBlock if name == "web_search" else WebFetchToolResultBlock
+    refused = {
+        block.tool_use_id
+        for block in response.content
+        if isinstance(block, result_type)
+        and getattr(block.content, "error_code", None) == "max_uses_exceeded"
+    }
+    return sum(
+        1
+        for block in response.content
+        if isinstance(block, ServerToolUseBlock) and block.name == name and block.id not in refused
+    )
 
 
 def _json_body(text: str) -> str:
@@ -524,6 +568,15 @@ def _json_body(text: str) -> str:
 def _summary(run: ResearchRun) -> list[str]:
     data = run.data
     lines = [f"Research {data['status']}: {run.path}"]
+    timings = data.get("timings")
+    if timings:
+        local = timings["local_processing_seconds"]
+        local_label = "not reached" if local is None else f"{local:.3f}s"
+        lines.append(
+            f"Timing: request {timings['request_seconds']:.2f}s; "
+            f"local processing {local_label} "
+            "(provider search/fetch/generation breakdown unavailable)."
+        )
     if data["status"] != "completed":
         lines.append(f"Error: {data['error']}")
         lines.append("No evidence was produced; do not read this as 'no concerns found'.")

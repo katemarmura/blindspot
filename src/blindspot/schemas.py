@@ -419,7 +419,9 @@ class ResearchFinding(BaseModel):
     source_statement: str
     interpretation: str
     applicability_limits: str
-    excerpts: list[ResearchExcerpt] = Field(min_length=1)
+    # Missing evidence is rejected per finding by research.verify, not accepted
+    # as support and not a reason to discard other, supported findings.
+    excerpts: list[ResearchExcerpt] = Field(default_factory=list)
 
     @field_validator("source_statement", "interpretation", "applicability_limits")
     @classmethod
@@ -452,9 +454,11 @@ class ResearchQuestion(BaseModel):
     question: str
     source_finding_ids: list[str] = Field(min_length=1)
     status: ResearchStatus
-    findings: list[ResearchFinding]
-    missing_information: list[MissingInformation]
-    conflict_notes: list[str]
+    # Empty collections may be omitted by the research model. Status-specific
+    # requirements are enforced below, rather than requiring empty JSON arrays.
+    findings: list[ResearchFinding] = Field(default_factory=list)
+    missing_information: list[MissingInformation] = Field(default_factory=list)
+    conflict_notes: list[str] = Field(default_factory=list)
 
     @field_validator("question")
     @classmethod

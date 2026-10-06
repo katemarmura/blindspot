@@ -310,6 +310,9 @@ def summarize_research(path: Path) -> Any:
     )
     print(f"      {_call_diag(data.get('call_diagnostics'))}")
     sources = data.get("sources") or []
+    print(f"      timings (seconds): {data.get('timings', 'unavailable')}")
+    reference = (data.get("settings") or {}).get("research_reference_time", "unavailable")
+    print(f"      research reference time: {reference}")
     print(f"      sources: {[s.get('id') for s in sources]}")
     outcomes = [f.get("outcome") for f in data.get("fetches") or []]
     print(f"      fetch outcomes: {outcomes}")

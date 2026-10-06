@@ -655,6 +655,28 @@ uv run --locked python .claude/skills/compare-reassessments/compare_reassessment
 uv run --locked python .claude/skills/compare-reassessments/compare_reassessments.py --batch runs/team-<id>/clarify-<id>
 ```
 
+### Comparing research runs (coding-agent skill)
+
+`.claude/skills/compare-research/` compares two saved `research-*.json` files to judge
+whether a change improved speed, evidence quality, or usefulness. It's read-only, makes no
+API calls, and gives no numeric score.
+
+- **Invoke it:** `/compare-research <older-research.json> <newer-research.json>`. Both files
+  are required; it never picks a pair itself.
+- **Structure (helper):** it checks the saved input snapshot (plan, findings, question
+  wording, answers), prompt, model, limits, reference time, and git state. It then compares
+  outcomes and performance, with absolute and percentage changes; missing metadata is
+  "unavailable", never zero. Questions are matched by finding IDs, not position.
+- **Meaning (skill):** official sources, honest statuses, invented dates or arrangements,
+  interpretations that keep the source's date and scope, and leads versus fetched evidence.
+- **Changed limits:** when question, search, or fetch budgets changed, it says the speed
+  comparison isn't like-for-like.
+
+```bash
+uv run --locked python .claude/skills/compare-research/compare_research.py \
+  runs/<...>/research-A.json runs/<...>/research-B.json
+```
+
 ## Project layout
 
 ```text

@@ -530,8 +530,21 @@ Project-level Claude Code skills live in `.claude/skills/`:
   semantic review stays in the skill's instructions. Tested in
   `tests/test_inspect_session_helper.py`.
 
+- `compare-research` (`/compare-research <older> <newer>`) compares two saved research
+  artifacts. It needs two explicit files and never picks a pair. Its helper,
+  `compare_research.py`, reuses `summarize_run.py`'s parsing. It reports:
+  - snapshot, prompt, model, limit, reference-time, and git differences;
+  - outcomes and performance deltas, with missing metadata as unavailable and a note
+    when scope limits changed;
+  - questions matched by finding IDs, coverage, sources, fetch outcomes, unfetched leads,
+    and rejected evidence.
+
+  Semantic judgments (official sources, invented dates, leads versus evidence) stay in
+  the skill; there's no keyword or domain scoring. Tested in
+  `tests/test_compare_research_helper.py`.
+
 These are development aids, not Blindspot runtime capabilities. If an artifact format
-changes, update `inspect-run`'s format table and both helpers.
+changes, update `inspect-run`'s format table and the helpers that read it.
 
 ## Conventions
 

@@ -208,9 +208,17 @@ Interpretation rules:
 - Do not invent new factual claims, risks, sources, numbers, or advice, and do not conduct a new investigation. Work only from the supplied plan, findings, and responses.
 - If a response conflicts with the plan or with another response, keep the uncertainty and state it conditionally rather than silently choosing one version.
 
+Conditional wording and section placement example (illustrative placeholders, not facts to copy):
+Context: an original finding says arrangement A may not permit activity B. The user confirms activity B but has not said which arrangement they will use.
+Incorrect: "The arrangement A you will rely on may not permit B" or "B could breach the conditions regardless of the arrangement used." Both extend the finding beyond the supplied facts.
+Correct: "If you intend to use arrangement A, whether it permits B remains unconfirmed." Keep that condition explicit in the takeaway too; discussing A is not evidence that the user chose it.
+Place this concern, its missing fact, and its consequence in one remaining consideration. Do not also add "Whether A permits B" to unresolved_uncertainties: that is the same point. Alternatively, place the entire point in unresolved_uncertainties if it is solely a missing fact, without repeating it under remaining_considerations. An empty section is valid; the takeaway may summarize the selected point.
+
 External research rules (only when an external research section is supplied):
 - Research quotes come from retrieved public pages and were checked against the retrieved text; the research interpretation and applicability notes are another model's reading, not established facts about this user. Keep external evidence, user-reported facts, and interpretations distinct.
-- For any item or takeaway that relies on external evidence, list the research source IDs in research_source_ids. Leave research_source_ids empty otherwise, and always when no research section is supplied.
+- For any item or takeaway that relies on external evidence, cite only IDs listed in citation_source_ids, and only when their supplied verified excerpts support that item. A fetched page without accepted excerpts is not citable evidence. If citation_source_ids is empty, every research_source_ids list must be empty. You may explain that research was inconclusive without citing a page or repeating an unverified rule from search leads or conflict notes as a fact.
+- Preserve unknown arrangements: discussing a rule does not mean the user intends to use that entry route, permission, or arrangement. State the condition explicitly in both the concern and takeaway (for example, "if you intend to use that route"). Do not turn an expert's assumption into a reported user decision.
+- Do not repeat the same open concern as an unresolved uncertainty merely by adding "whether". Keep the missing fact and its consequence together in one section; use the other only for a distinct decision-relevant uncertainty. The takeaway may summarize the priority concern, but the detailed sections must not duplicate it.
 - Use evidence only to refine the supplied concerns. It may show that a reported arrangement meets or fails a sourced requirement; state this conditionally where applicability depends on facts not supplied.
 - Insufficient evidence, conflicting sources, failed retrieval, and missing user information leave the related uncertainty open; they are never evidence that no concern exists.
 - Do not raise unrelated concerns from research, and do not demand perfect arrangements because a source exists.

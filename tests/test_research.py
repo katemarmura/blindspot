@@ -961,6 +961,61 @@ def test_reassessment_uses_research_evidence_with_traceable_sources(
     assert saved["report"]["takeaway"]["research_source_ids"] == ["s1"]
 
 
+@pytest.mark.parametrize("cite", [True, False])
+def test_reassessment_cannot_cite_fetched_page_without_verified_evidence(
+    tmp_path: Path, fake: _Fake, cite: bool
+) -> None:
+    artifact, responses, research_path = _researched(tmp_path, fake)
+    data = json.loads(research_path.read_text())
+    data["questions"][0]["supported_findings"] = []
+    data["questions"][0]["status"] = "insufficient_evidence"
+    research_path.write_text(json.dumps(data))
+    fake.outcomes.append(_text_message(json.dumps(_cited(_REPORT, ["s1"] if cite else []))))
+
+    result = asyncio.run(clarification.reassess(artifact, responses, research_path))
+
+    section = fake.calls[0]["messages"][0]["content"].split("External research evidence", 1)[1]
+    assert '"citation_source_ids": []' in section
+    assert '"sources": []' in section
+    assert "insufficient_evidence" in section
+    if cite:
+        assert result.error is not None and result.error.diagnostics is not None
+        assert "unknown_research_source_id" in json.dumps(result.error.diagnostics.to_json())
+    else:
+        assert result.error is None
+    assert len(fake.calls) == 1
+
+
+def test_mixed_research_preserves_inventory_but_exposes_only_verified_sources(
+    tmp_path: Path, fake: _Fake
+) -> None:
+    artifact, responses, research_path = _researched(tmp_path, fake)
+    data = json.loads(research_path.read_text())
+    data["sources"].append({**data["sources"][0], "id": "s2", "url": "https://unused.example"})
+    research_path.write_text(json.dumps(data))
+    batch = clarification.load_artifact(artifact)
+    evidence = clarification.load_research_evidence(
+        research_path, batch, clarification.load_responses(responses, batch)
+    )
+    assert evidence.source_ids == {"s1", "s2"}  # lineage retains the original inventory
+    assert evidence.citation_source_ids == {"s1"}
+    assert '"id": "s2"' not in evidence.section()
+    assert '"id": "s1"' in evidence.section()
+
+
+def test_followup_rejects_legacy_citation_without_verified_evidence_before_call(
+    tmp_path: Path, fake: _Fake
+) -> None:
+    reassessment, research_path = _researched_reassessment(tmp_path, fake)
+    data = json.loads(research_path.read_text())
+    data["questions"][0]["supported_findings"] = []
+    research_path.write_text(json.dumps(data))
+    before = len(fake.calls)
+    with pytest.raises(clarification.ClarificationInputError):
+        asyncio.run(clarification.prepare_followup(reassessment))
+    assert len(fake.calls) == before
+
+
 @pytest.mark.parametrize(
     ("ids", "use_research", "issue"),
     [

@@ -480,6 +480,13 @@ class ResearchContent(BaseModel):
     def source_ids(self) -> set[str]:
         return {source.id for source in self.sources}
 
+    @property
+    def citation_source_ids(self) -> set[str]:
+        """Fetched sources backed by at least one accepted evidence excerpt."""
+        return self.source_ids & {
+            e.source_id for q in self.questions for f in q.supported_findings for e in f.evidence
+        }
+
 
 def _research_citations(report: ReassessmentSections) -> set[str]:
     """Every research source ID a report cites (items and structured takeaway)."""
@@ -604,7 +611,9 @@ class ClarificationArtifact(BaseModel):
             )
         # Research citations in the copied report must resolve against the copied evidence.
         cited = _research_citations(self.prior_reassessment)
-        available = self.prior_research.source_ids if self.prior_research is not None else set()
+        available = (
+            self.prior_research.citation_source_ids if self.prior_research is not None else set()
+        )
         if not cited <= available:
             raise ValueError(
                 "the prior reassessment cites research sources that prior_research does not hold"
@@ -1010,6 +1019,10 @@ class ResearchEvidence:
     def source_ids(self) -> set[str]:
         return self.content.source_ids
 
+    @property
+    def citation_source_ids(self) -> set[str]:
+        return self.content.citation_source_ids
+
     def link(self) -> dict[str, Any]:
         """The lineage block saved in a reassessment that used this evidence."""
         return {
@@ -1021,7 +1034,12 @@ class ResearchEvidence:
 
     def section(self) -> str:
         data = {
-            "sources": [source.model_dump() for source in self.content.sources],
+            "sources": [
+                source.model_dump()
+                for source in self.content.sources
+                if source.id in self.citation_source_ids
+            ],
+            "citation_source_ids": sorted(self.citation_source_ids),
             "questions": [
                 {
                     "question": q.question,
@@ -1046,6 +1064,8 @@ class ResearchEvidence:
             "checked against text retrieved from the listed public pages; source_statement, "
             "interpretation, and applicability_limits are the research model's reading, not "
             "verified facts about this user. Retrieval time is not proof that a rule is current. "
+            "Only citation_source_ids may be cited; other fetched pages supplied no verified "
+            "evidence. Conflict notes are context, not independently verified evidence. "
             "Questions with insufficient evidence, conflicting sources, failed retrieval, or "
             "missing user information remain open uncertainty, not evidence of no concern:\n"
             f"{json.dumps(data, indent=2, ensure_ascii=False)}"
@@ -1158,7 +1178,7 @@ async def reassess(
                 parsed,
                 artifact,
                 _accumulated(artifact, responses),
-                research.source_ids if research is not None else None,
+                research.citation_source_ids if research is not None else None,
             ),
         )
     except ClarificationError as exc:
@@ -1339,7 +1359,10 @@ def load_followup_source(reassessment_path: Path) -> FollowupSource:
         else None
     )
     if _reassessment_reference_issues(
-        saved.report, artifact, responses, research.source_ids if research is not None else None
+        saved.report,
+        artifact,
+        responses,
+        research.citation_source_ids if research is not None else None,
     ):
         raise ClarificationInputError(
             "Reassessment report cites findings, questions, or research sources that do not "

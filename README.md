@@ -504,6 +504,10 @@ uv run python -m blindspot.clarification reassess \
     fetched in that request. Quotes that don't match, URLs that were never fetched, overlong
     quotes, PDFs, and non-public pages are recorded as rejected, never used as evidence.
   - Search snippets alone are never evidence.
+  - Reassessment can cite only fetched sources with accepted evidence excerpts. A page
+    merely appearing in the fetched inventory is not enough. Inconclusive research may
+    still inform an uncertainty without a source citation; follow-up rounds enforce
+    the same evidence requirement.
   - For legal/administrative questions, the prompt directs research toward official
     sources first. Secondary-only findings stay provisional, and unresolved conflicts
     stay open. These judgments require manual review; matching a quote does not verify

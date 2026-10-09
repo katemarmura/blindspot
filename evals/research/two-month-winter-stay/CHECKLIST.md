@@ -120,6 +120,25 @@ than claiming it was tested. Mock tests cannot verify these research judgments.
 
 ## Reassessment with research
 
+- [ ] **Conditional wording and duplication regression.** Compare against
+      `reassessment-20261009T134344Z-505d23.json` when available. Its takeaway says
+      "the visa-exemption period you'd rely on" despite no reported entry route, and
+      its remote-work consequence says "regardless of the entry route used" despite
+      discussing only visitor status. Require an explicit condition wherever that
+      assumption matters, including the takeaway. Each concern and its missing fact
+      should appear together in one detailed section, not once as a concern and again
+      as "whether" that same concern holds. A takeaway summary is allowed. Do not pass
+      an output that merely drops a distinct concern to eliminate repetition.
+
+- [ ] **Empty evidence regression.** With research `20261006T181940Z-677758`, which has
+      a fetched s1 but no supported findings, every `research_source_ids` list is empty.
+      Research remains inconclusive; search-snippet claims are not treated as rules.
+      Compare against `reassessment-20261008T115447Z-48de0d.json` if available: it cited
+      s1 despite no accepted evidence, repeated both open concerns across sections,
+      and framed visa-free entry without an explicit condition. The updated result
+      must preserve an unstated entry route as conditional (including the takeaway)
+      and avoid repeating the same missing fact in remaining and unresolved sections.
+
 - [ ] **Traceability.** Items and the takeaway that rely on research list
       `research_source_ids`, and those sources support what the item says.
 - [ ] **Distinct kinds of information.** User answers ("the user reports…"), sourced rules

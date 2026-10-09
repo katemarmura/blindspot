@@ -289,6 +289,9 @@ What exists:
 
     The rules stay general, with no domain-specific wording. Judge prompt changes with the
     manual fixture in `evals/reassessment/` (its `CHECKLIST.md`), not with mocked tests.
+    A short abstract example contrasts conditional arrangements with assumed ones and
+    shows a concern placed in only one detailed section. The researched travel fixture
+    also checks these regressions; passing unit tests does not establish prompt quality.
   - **Optional research (`research.py`, `python -m blindspot.research`):**
     - **Integration:** opt-in. It uses Anthropic server tools (`web_search_20250305`,
       `web_fetch_20250910`) in ONE request on the existing key and model; no new
@@ -335,8 +338,12 @@ What exists:
       - The input gains a labelled evidence section.
       - Report items and `ConclusionInsight` gained an optional `research_source_ids`
         (omitted from JSON when empty, via `exclude_if`). `_reassessment_reference_issues`
-        checks it against the research sources, and rejects any citation when no research
-        was supplied.
+        checks it against `citation_source_ids`: fetched sources referenced by accepted
+        evidence excerpts. Fetched-only pages are not citable. Model input lists only
+        eligible sources plus their eligible IDs, while lineage retains the full fetched
+        inventory for compatibility. Follow-up and round-2 validation use the same rule;
+        legacy reports citing unsupported pages cannot start a follow-up. No saved file
+        is rewritten. Citations without supplied research are also rejected.
       - The saved reassessment gets a `research` block (`ResearchEvidence.link()`) only when
         research was used.
     - **Follow-up lineage:** `load_followup_source` reads the reassessment's `research`

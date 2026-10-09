@@ -41,10 +41,18 @@ def git_state() -> dict[str, Any]:
 
 def write_json(path: Path, data: dict[str, Any]) -> None:
     # Write to a temporary file then rename, so an interruption never leaves
-    # a truncated result file behind.
-    tmp = path.with_suffix(".json.tmp")
-    tmp.write_text(json.dumps(data, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
-    os.replace(tmp, path)
+    # a truncated result file behind. The temporary file is new and uniquely
+    # named (O_EXCL), so a pre-existing file or symlink is never written through.
+    content = json.dumps(data, indent=2, ensure_ascii=False) + "\n"
+    tmp = path.with_name(f".{path.name}.{secrets.token_hex(6)}.tmp")
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o666)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as file:
+            file.write(content)
+        os.replace(tmp, path)
+    except BaseException:
+        tmp.unlink(missing_ok=True)
+        raise
 
 
 def create_run_dir(prefix: str = "", runs_dir: Path = RUNS_DIR) -> tuple[str, Path]:

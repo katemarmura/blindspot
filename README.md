@@ -16,8 +16,8 @@ most one bounded recovery call — see below), and a minimal runner (`blindspot.
 that runs one to three perspectives concurrently. You either name them yourself or let one
 team-selector call propose them (`--auto-team`, which also synthesizes the results).
 There's also a small model-comparison command (`blindspot.compare`) and one manual
-clarification round over a saved auto-team run (`blindspot.clarification`). No cross-review,
-UI, or database yet.
+clarification round over a saved auto-team run (`blindspot.clarification`), whose saved
+batches can also be viewed and answered over HTTP. No cross-review, UI, or database yet.
 
 **Planned experience:** guided clarification, with one question at a time and a short
 conclusion informed by the user's answers. This is not implemented in the current CLI.
@@ -425,6 +425,57 @@ If no response arrived, those response fields are `null` rather than looking lik
 empty response. Only counts and types are saved, never the returned text or thinking
 content. A failed step prints a short call/response summary to stderr.
 
+#### Answering over HTTP (local dev server)
+
+The FastAPI app can show a saved batch (round 1 or a follow-up) and save answers one at a
+time. It uses the same file, validation, and atomic writes as `answer`, and needs no API
+key. **No endpoint calls a model**: reassessment, research, and follow-ups stay CLI commands.
+
+```bash
+uv run uvicorn blindspot.main:app --reload   # from the repository root; reads ./runs
+```
+
+A batch is named by its folder, such as `clarify-20261009T140042Z-6b0833`. Find yours
+with `ls -d runs/*/clarify-* runs/evals/*/clarify-*`. Only folders directly inside a run
+folder under `runs/` (or `runs/evals/`) are found; paths aren't accepted.
+
+The example below uses a copy of the committed round-1 kitten fixture, so saving doesn't
+touch your own batches. Its `q1` asks the kitten's age and vaccinations:
+
+```bash
+mkdir -p runs/evals/api-example
+cp -R evals/reassessment/kitten-before-holiday runs/evals/api-example/clarify-kitten-example
+
+# View the questions, perspectives, and current statuses
+curl -s http://127.0.0.1:8000/clarifications/clarify-kitten-example
+
+# Save (or replace) one answer
+curl -s -X PUT http://127.0.0.1:8000/clarifications/clarify-kitten-example/responses/q1 \
+  -H 'Content-Type: application/json' \
+  -d '{"status": "answered", "answer": "Ten weeks old; first vaccination done."}'
+```
+
+In a follow-up (round 2) batch, only that round's questions (`q4` and later) can be saved;
+check `editable` in the `GET` response.
+
+| Endpoint | What it does |
+| --- | --- |
+| `GET /clarifications/{batch_id}` | Batch ID, `clarification_id`, `round`, `plan`, `responses_saved`, `next_question_id` (first question of this round with no response), and `questions`: `id`, `round`, `question`, `why_it_matters`, `perspectives`, `source_finding_ids`, `status`, `answer`, `editable`. Never creates files. |
+| `PUT /clarifications/{batch_id}/responses/{question_id}` | Body `{"status": …, "answer": …}`. Saves that one response in the batch's `responses.json` (created from the template if missing) and returns the updated batch. Other entries, the instructions, and the reference `question` fields are kept. |
+
+- **Statuses** are the response-file ones: `answered` (text required), `dont_know` (no text),
+  `not_applicable` (optional explanation), `deferred` (no text), or `null` for unanswered.
+  `status` must be present; `null` clears a response. "I don't know" is a recorded answer;
+  `null` means not answered.
+- **Follow-up batches** list the round-1 questions with their recorded answers and
+  `editable: false`. Saving one returns 409; only this round's questions can be answered.
+- **Errors:** 404 for an unknown batch or question ID; 422 for an invalid answer (for
+  example `answered` without text); 409 for an invalid or failed saved batch, an invalid
+  response file (reported and never overwritten), a round-1 question in a follow-up, or two
+  batches with the same folder name; 403 if the batch or its files resolve outside `runs/`
+  (for example through a symlink).
+- The interactive API docs are at http://127.0.0.1:8000/docs.
+
 ## Development commands
 
 | Command | Purpose |
@@ -439,7 +490,8 @@ content. A failed step prints a short call/response summary to stderr.
 | `uv add --dev <package>` | Add a dev-only dependency |
 | `uv lock` | Refresh `uv.lock` after editing `pyproject.toml` by hand |
 
-Health check: `GET /health` → `200 {"status": "ok"}`.
+Health check: `GET /health` → `200 {"status": "ok"}`. For the batch-answering endpoints, see
+[Answering over HTTP](#answering-over-http-local-dev-server).
 
 All checks run in CI on every push and pull request — see
 [`.github/workflows/ci.yml`](.github/workflows/ci.yml).
@@ -685,7 +737,9 @@ uv run --locked python .claude/skills/compare-research/compare_research.py \
 
 ```text
 src/blindspot/           # the blindspot package (src layout: importable only after install)
-src/blindspot/main.py    # FastAPI app (currently just GET /health)
+src/blindspot/main.py    # FastAPI app: GET /health plus the batch-answering router
+src/blindspot/batch_api.py  # HTTP view/answer endpoints for one saved clarification batch
+src/blindspot/guided.py  # guided one-question-at-a-time answering CLI
 src/blindspot/config.py  # ANTHROPIC_API_KEY / ANTHROPIC_MODEL loading
 src/blindspot/schemas.py # Finding / ExpertReport, ExpertDefinition / TeamPlan, Synthesis* (Pydantic)
 src/blindspot/prompts.py # expert, finding-selection, team-selector, synthesis, clarification prompts

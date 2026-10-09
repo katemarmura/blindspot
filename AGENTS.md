@@ -32,15 +32,18 @@ Implemented so far, all manual (`blindspot.clarification`, below):
 - **one** optional follow-up batch (round 2), started from a successful round-1
   reassessment and reassessed with the answers from both rounds.
 
-Not yet implemented: one-question-at-a-time interaction, suggested answers, more than one
-follow-up round, automatic stopping between rounds, and a tailored final conclusion.
-Preserve the existing CLI as a baseline; do not speculatively add a UI, database,
+One-question-at-a-time answering exists in the terminal (`answer`) and over HTTP (view and
+save one response; see `batch_api.py` below). Not yet implemented: a UI, suggested answers,
+more than one follow-up round, automatic stopping between rounds, and a tailored final
+conclusion. The intended first screen is described in `docs/project-brief.md` (UI
+direction). Preserve the existing CLI as a baseline; do not speculatively add a database,
 framework, or automatic multi-round loop. Keep user answers distinct from expert
 assumptions, and retain links to original findings.
 
 ## Current scope: minimal server, a single-expert experiment, a multi-expert runner (manual or auto-selected team), a model-comparison CLI, and a manual clarification round with one follow-up
 
-**As of now, this repository contains a project scaffold, a bare FastAPI server, and one
+**As of now, this repository contains a project scaffold, a small FastAPI server (health
+plus viewing and answering a saved clarification batch; no model calls), and one
 small domain contract with one real LLM call (plus at most one bounded recovery call)
 built on it. It runs alone, concurrently for 1–3 caller-supplied perspectives, for a
 1–3 expert team proposed by one team-selector call (followed by one synthesis call), or
@@ -381,6 +384,29 @@ What exists:
       loaded only then, so answering needs no credentials. It never moves on to a follow-up
       round by itself.
     - **Covered by** `tests/test_guided_cli.py`.
+  - **HTTP view/answer (`batch_api.py`, mounted by `main.create_app(runs_dir)`):** the
+    first step toward a UI, with no frontend, auth, or database.
+    - `GET /clarifications/{batch_id}` returns the questions (both rounds in a follow-up;
+      round-1 ones `editable: false` with their recorded answers), derived perspectives,
+      `why_it_matters`, statuses (`null` = unanswered), and `next_question_id`.
+    - `PUT /clarifications/{batch_id}/responses/{question_id}` with `{status, answer}`
+      saves one entry via `open_responses` / `ResponseBook.record`, the same code
+      as `answer`. `ResponseEntry` checks the status/answer combination (422). An invalid
+      response file or artifact is a 409 and is never overwritten. A round-1 question in a
+      round-2 batch is a 409, and an unknown batch or question is a 404. `record` now also
+      accepts `None` to clear a response and saves the normalized entry (a blank
+      explanation becomes null).
+    - **Batch IDs** are folder names matching `clarify-[A-Za-z0-9][A-Za-z0-9_-]*`, looked
+      up only at `<runs>/*/<id>` and `<runs>/evals/*/<id>`. Duplicates are a 409. The
+      folder and artifact must resolve inside the runs directory, and `responses.json`
+      must not be a symlink at all (both 403). Clients never pass paths.
+    - `runs.write_json` (used by every writer) writes through a fresh, uniquely named
+      temporary file opened with `O_EXCL | O_NOFOLLOW`, so a planted file or symlink is
+      never written through. `_read_json` reports invalid UTF-8 as an unreadable file.
+    - Writes are serialized by one lock per app. No endpoint calls a model, launches
+      research, reassessment, or follow-ups, or loads credentials.
+    - **Covered by** `tests/test_batch_api.py` (TestClient over copies of the kitten
+      fixture in `tmp_path`).
   - **`followup --reassessment …/reassessment-*.json` (round 2, manual, at most once):**
     - `load_followup_source` validates everything before any call or file is created:
       - the reassessment is a successful round-1 one with a report;

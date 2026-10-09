@@ -163,7 +163,7 @@ def _read_json(path: Path, what: str) -> Any:
         return json.loads(path.read_text(encoding="utf-8"))
     except FileNotFoundError:
         raise ClarificationInputError(f"{what} not found: {path}") from None
-    except (OSError, json.JSONDecodeError) as exc:
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
         raise ClarificationInputError(f"{what} could not be read as JSON: {path}") from exc
 
 

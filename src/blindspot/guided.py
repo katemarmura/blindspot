@@ -99,15 +99,16 @@ class ResponseBook:
         entry = self.entry(question_id)
         return entry.get("status") if entry is not None else None
 
-    def record(self, question_id: str, status: ResponseStatus, answer: str | None) -> None:
+    def record(self, question_id: str, status: ResponseStatus | None, answer: str | None) -> None:
         # Validate the single new entry before writing; everything else is untouched.
-        ResponseEntry(question_id=question_id, status=status, answer=answer)
+        # None clears a response back to unanswered (the HTTP interface allows it).
+        checked = ResponseEntry(question_id=question_id, status=status, answer=answer)
         entry = self.entry(question_id)
         if entry is None:
             entry = {"question_id": question_id}
             self.data["responses"].append(entry)
-        entry["status"] = status
-        entry["answer"] = answer
+        entry["status"] = checked.status
+        entry["answer"] = checked.answer  # a blank explanation is saved as null
         write_json(self.path, self.data)
 
 

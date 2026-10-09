@@ -36,6 +36,17 @@ rules and call budgets, reassessment responsibilities, and persistence remain op
 assume every answer requires rerunning every expert. No UI, database, agent framework, or
 automatic multi-round orchestration is required by this direction update alone.
 
+## UI direction — 2026-10-09
+
+The first step toward a UI is an HTTP interface for viewing and answering one saved
+clarification batch (see `AGENTS.md`). Guidance for the first screen, not yet built:
+
+- Simple, minimalist design.
+- Bright orange as the primary accent.
+- One question at a time, with clear labels for its originating perspective(s).
+- Accessible text contrast. Orange is for accents and controls; body text stays a
+  high-contrast neutral, and any text on orange or orange text must still meet WCAG AA.
+
 The original brief below preserves the initial exploration. Its architecture diagrams,
 limits, and statements about implementation status are historical proposals; consult
 `AGENTS.md` for current implementation scope and this update for the clarification direction.

@@ -601,6 +601,27 @@ the Python ones via `uv run --locked`) before pushing, and keep the Makefile ali
 if CI changes.
 
 Project-level Claude Code skills live in `.claude/skills/`:
+- `develop` coordinates implementation, independent review (including documentation),
+  and at most two fix passes. Claude Code's `CLAUDE.md` selects this workflow by default
+  for implementation requests; `/develop <task>` invokes it explicitly. Review-only
+  requests do not authorize fixes. The main session coordinates the project agents in
+  `.claude/agents/`: `blindspot-reviewer`, `blindspot-fixer`, and the advisory
+  `blindspot-designer` for UI work. Only one writer runs at a time. Each agent has a
+  console `color`, and the coordinator relays every agent's response to the user as it
+  arrives, without pausing the loop. This is an
+  instruction-driven development workflow, not a CI gate or Blindspot runtime feature.
+  A Claude Code hook (`.claude/hooks/review_gate.py`, registered in
+  `.claude/settings.json`) reminds each prompt about `develop` and, when files changed
+  since the prompt without a completed `blindspot-reviewer` run on that exact state,
+  blocks the session from finishing at most twice per prompt, then gives up with a
+  warning. A stop right after a block with no file changes since it (the session declined
+  to review) is allowed with a warning; edits after a block are blocked again. The tree
+  state is a content fingerprint independent of HEAD, so committing or stashing reviewed
+  changes keeps them reviewed. State is kept under `.git/claude-review-gate/`; errors,
+  `BLINDSPOT_REVIEW_GATE=off`, and prompts containing one of a fixed set of explicit skip
+  phrases (`SKIP_PATTERN`; listed in the README) let it finish. Detection is phrase-based,
+  not an understanding of intent. Tested in `tests/test_review_gate.py` against a temporary
+  git repo.
 - `review-change` reviews an implementation against its requested scope.
 - `inspect-run` does a read-only review of saved `runs/` artifacts: stage outcomes, usage,
   tracing, and quality observations. It has a stdlib helper, `summarize_run.py`.

@@ -806,6 +806,84 @@ uv run --locked python .claude/skills/compare-research/compare_research.py \
   runs/<...>/research-A.json runs/<...>/research-B.json
 ```
 
+### Claude Code development workflow
+
+The project now has an implementation → independent review → fix → re-review workflow.
+`CLAUDE.md` tells the main Claude Code session to use it for implementation and bug-fix
+requests. You can also start it explicitly:
+
+```text
+/develop Add the next approved UI feature
+/develop review current changes
+```
+
+The second command reviews only; it does not authorize fixes. For implementation work,
+the main session implements and coordinates three project subagents:
+
+- `blindspot-reviewer` checks behavior, tests, and relevant documentation using
+  `review-change`, without editing the project.
+- `blindspot-fixer` fixes confirmed, in-scope findings and related tests/docs.
+- `blindspot-designer` advises before material UI changes and checks the result against
+  the brief. It uses source and supplied visual evidence; it has no browser tools itself.
+
+Each agent has its own console colour (reviewer blue, fixer green, designer purple).
+The main session announces each agent as it starts and relays its response (verdict,
+findings, checks) when it returns, then carries on without waiting; these updates are
+for monitoring, not approval. A review-only request still runs one reviewer pass.
+
+Agents run sequentially, sharing the checkout. The loop allows at most two fix passes
+and three reviews, then reports any unresolved findings instead of continuing forever.
+Any edit after a review counts as a fix pass, whoever makes it; if a fix touches the UI,
+the designer re-checks it before the re-review.
+Code changes use `make verify`; documentation-only work uses accuracy/link checks and
+`git diff --check`. Prompt quality and browser behavior are reported separately from
+automated test results. The workflow doesn't commit, push, or run live Blindspot API calls.
+Claude Code's agent work still consumes Claude Code usage, with models inherited from
+the parent session and normal permission controls preserved.
+
+#### Review gate hook
+
+`.claude/settings.json` registers `.claude/hooks/review_gate.py` for four Claude Code
+hook events:
+
+- **Each prompt:** it records the state of the working tree and adds a one-line reminder
+  to use `develop` for implementation requests.
+- **Reviewer start/stop:** a `blindspot-reviewer` run that finishes with the tree
+  unchanged marks that exact state as reviewed.
+- **End of turn:** if files changed since your prompt and that state wasn't reviewed (and
+  no reviewer is still running), it sends the session back to run the review.
+
+It can't block forever: at most **two** times per prompt, then it lets the turn end and
+shows a warning that the changes weren't reviewed. If the session answers a block by
+explaining that no review applies and stops without changing files, that stop is allowed
+with the same kind of warning; if it edits files instead, it is blocked again. The state
+it compares is the content of your files (tracked and non-ignored untracked), not the
+commit, so committing or stashing reviewed changes doesn't count as new changes. Your own
+pre-existing changes don't trigger it, and neither do git-ignored files such as `runs/`.
+
+To bypass it for one turn, use an explicit phrase in the prompt at the start of a
+clause (the start of the prompt or a line, after punctuation such as `.`, `,`, `;`, or
+`!`, or after "please", "and", "but", "so", "then", or "just"): "skip
+review" / "skip the workflow" (also "bypass" or "pause", as in "pause the workflow"),
+"don't review" / "do not use the develop workflow" (also with "run", "start", "do",
+"need", or "bother with"), or anywhere "without review" / "without the workflow" at the
+end of a clause, or "no review needed". Detection is a fixed phrase match
+(`SKIP_PATTERN` in the hook), not an understanding of intent: descriptions such as "fix
+the bug where no review results are shown" don't count. You can also start Claude Code
+with `BLINDSPOT_REVIEW_GATE=off`. Errors let the turn end. State lives in
+`.git/claude-review-gate/`, so nothing is tracked. Recording the state stages your
+files into a throwaway index, which can add unreferenced copies of changed and untracked
+files to `.git/objects` (`git gc` removes them later); with large untracked files, this
+takes disk space. It checks that a review ran, not what the review concluded.
+
+Restart Claude Code after installing or editing these agent definitions or hooks, then
+use the explicit command for the first task. The files are in `.claude/agents/`,
+`.claude/hooks/`, and `.claude/skills/develop/SKILL.md`. Apart from that hook, the
+workflow is instruction-driven, not enforced by CI: it can be interrupted, and cannot
+promise exhaustive review. The completion
+report must show the actual review verdict, checks, fix passes, and limitations; missing
+agents or unfinished checks mean incomplete work, not approval.
+
 ## Project layout
 
 ```text

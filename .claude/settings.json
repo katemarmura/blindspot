@@ -1,0 +1,48 @@
+{
+  "hooks": {
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "uv run --project \"$CLAUDE_PROJECT_DIR\" --no-sync --quiet python \"$CLAUDE_PROJECT_DIR/.claude/hooks/review_gate.py\"",
+            "timeout": 30
+          }
+        ]
+      }
+    ],
+    "SubagentStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "uv run --project \"$CLAUDE_PROJECT_DIR\" --no-sync --quiet python \"$CLAUDE_PROJECT_DIR/.claude/hooks/review_gate.py\"",
+            "timeout": 30
+          }
+        ]
+      }
+    ],
+    "SubagentStop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "uv run --project \"$CLAUDE_PROJECT_DIR\" --no-sync --quiet python \"$CLAUDE_PROJECT_DIR/.claude/hooks/review_gate.py\"",
+            "timeout": 30
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "uv run --project \"$CLAUDE_PROJECT_DIR\" --no-sync --quiet python \"$CLAUDE_PROJECT_DIR/.claude/hooks/review_gate.py\"",
+            "timeout": 30
+          }
+        ]
+      }
+    ]
+  }
+}

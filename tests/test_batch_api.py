@@ -1,17 +1,23 @@
-"""The HTTP interface for viewing and answering a saved clarification batch.
+"""The HTTP interface for viewing, answering, and assessing a saved clarification batch.
 
 Batches are copies of the committed kitten fixture in a temporary runs directory; a
-round-2 batch is assembled from it by hand. No model, credentials, or network are used.
+round-2 batch is assembled from it by hand. Viewing and answering use no model or
+credentials. Assessment tests replace the Anthropic client with a fake and set a dummy key;
+nothing reaches the network.
 """
 
+import asyncio
 import hashlib
 import json
 import shutil
+import threading
 from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
 
+import anthropic
 import pytest
+from anthropic.types import Message, StopReason, TextBlock, Usage
 from fastapi.testclient import TestClient
 
 from blindspot import clarification
@@ -53,7 +59,7 @@ def _round_1(runs: Path, name: str = _ROUND_1, parent: str = _RUN) -> Path:
     return directory
 
 
-def _round_2(runs: Path) -> Path:
+def _round_2(runs: Path, prior_research: dict[str, Any] | None = None) -> Path:
     """A follow-up batch (q4) after the fixture's round-1 reassessment."""
     round_1 = _round_1(runs)
     data = json.loads((round_1 / "clarification.json").read_text())
@@ -80,6 +86,8 @@ def _round_2(runs: Path) -> Path:
             }
         ],
     )
+    if prior_research is not None:
+        data["prior_research"] = prior_research
     directory = runs / _RUN / _ROUND_2
     directory.mkdir()
     (directory / "clarification.json").write_text(json.dumps(data))
@@ -324,7 +332,7 @@ def test_failed_batch_is_reported(runs: Path, client: TestClient) -> None:
 @pytest.mark.parametrize(
     "batch_id",
     [
-        "..",
+        "%2E%2E",
         "..%2F..%2Fetc",
         "clarify-x%2F..%2F..%2Fsecret",
         "clarify-..",
@@ -439,3 +447,322 @@ def test_eval_copies_are_found_and_duplicate_names_are_ambiguous(
 
 def test_health_is_unchanged(client: TestClient) -> None:
     assert client.get("/health").json() == {"status": "ok"}
+
+
+# --- Assessment (mocked model) ---
+
+_MODEL = "claude-test-model"
+_SECRET = "MODEL-OUTPUT-MUST-NOT-LEAK"
+_INSIGHT = {
+    "blind_spot": "The separation space is still unknown.",
+    "why_it_mattered": "An incomplete introduction needs a fallback.",
+    "status": "open",
+    "status_explanation": "The user doesn't know which room would work.",
+}
+_ROUND_1_REPORT: dict[str, Any] = {
+    "remaining_considerations": [
+        {
+            "title": "Separation space",
+            "observation": "No room is named.",
+            "why_it_matters": "The cats may need to be apart.",
+            "source_finding_ids": ["e1-f2"],
+            "question_ids": ["q2"],
+        }
+    ],
+    "addressed_concerns": [
+        {"summary": "Kitten age is known.", "source_finding_ids": ["e3-f1"], "question_ids": ["q1"]}
+    ],
+    "unresolved_uncertainties": [],
+    "takeaway": _INSIGHT,
+}
+_ROUND_2_REPORT: dict[str, Any] = {
+    "remaining_considerations": [],
+    "addressed_concerns": [
+        {"summary": "Departure age known.", "source_finding_ids": ["e3-f1"], "question_ids": ["q4"]}
+    ],
+    "unresolved_uncertainties": [],
+    "takeaway": {**_INSIGHT, "status": "addressed"},
+}
+_CONFIRM = {"confirm_paid_request": True}
+
+
+def _message(text: str, stop_reason: StopReason = "end_turn") -> Message:
+    return Message(
+        id="msg_test",
+        type="message",
+        role="assistant",
+        model=f"{_MODEL}-20260101",
+        content=[TextBlock(type="text", text=text)],
+        stop_reason=stop_reason,
+        stop_sequence=None,
+        usage=Usage(input_tokens=900, output_tokens=300),
+    )
+
+
+class _FakeModel:
+    """Records each request; can hold the response until `release` is set."""
+
+    def __init__(self) -> None:
+        self.outcomes: list[Message] = []
+        self.calls: list[dict[str, Any]] = []
+        self.started = threading.Event()
+        self.release = threading.Event()
+        self.release.set()
+
+    async def create(self, **kwargs: Any) -> Message:
+        self.calls.append(kwargs)
+        self.started.set()
+        while not self.release.is_set():
+            await asyncio.sleep(0.01)
+        assert self.outcomes, "unexpected model call"
+        return self.outcomes.pop(0)
+
+    def user_content(self) -> str:
+        content: str = self.calls[-1]["messages"][0]["content"]
+        return content
+
+
+class _FakeClient:
+    def __init__(self, model: _FakeModel) -> None:
+        self.messages = model
+
+    async def __aenter__(self) -> "_FakeClient":
+        return self
+
+    async def __aexit__(self, *exc_info: object) -> bool:
+        return False
+
+
+@pytest.fixture
+def model(monkeypatch: pytest.MonkeyPatch) -> _FakeModel:
+    fake = _FakeModel()
+    monkeypatch.setattr(anthropic, "AsyncAnthropic", lambda **_: _FakeClient(fake))
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "dummy-test-key")
+    monkeypatch.setenv("ANTHROPIC_MODEL", _MODEL)
+    return fake
+
+
+def _answer(client: TestClient, batch: str, qid: str, body: dict[str, Any]) -> None:
+    assert client.put(f"/clarifications/{batch}/responses/{qid}", json=body).status_code == 200
+
+
+def _answer_round_1(client: TestClient) -> None:
+    _answer(client, _ROUND_1, "q1", {"status": "answered", "answer": "Ten weeks; one vaccine."})
+    _answer(client, _ROUND_1, "q2", {"status": "dont_know"})
+    _answer(client, _ROUND_1, "q3", {"status": "deferred"})
+
+
+def _reassessments(directory: Path) -> list[dict[str, Any]]:
+    return [json.loads(p.read_text()) for p in sorted(directory.glob("reassessment-*.json"))]
+
+
+def test_assessment_saves_and_returns_the_current_assessment(
+    runs: Path, client: TestClient, model: _FakeModel
+) -> None:
+    directory = _round_1(runs)
+    _answer_round_1(client)
+    responses_before = (directory / "responses.json").read_bytes()
+    model.outcomes.append(_message(json.dumps(_ROUND_1_REPORT)))
+
+    response = client.post(f"/clarifications/{_ROUND_1}/reassessments", json=_CONFIRM)
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["round"] == 1
+    assert body["conclusion_status"] == "current_assessment"
+    assert body["report"]["takeaway"] == _INSIGHT
+    assert body["closing_note"] is None  # a concern remains
+    assert body["answers_changed_during_assessment"] is False
+    assert body["used_research"] is False
+    assert [(r["question_id"], r["status"]) for r in body["assessed_responses"]] == [
+        ("q1", "answered"),
+        ("q2", "dont_know"),
+        ("q3", "deferred"),
+    ]
+    assert len(model.calls) == 1  # one request, no retries
+    assert "Ten weeks; one vaccine." in model.user_content()
+    (saved,) = _reassessments(directory)
+    assert saved["reassessment_id"] == body["reassessment_id"]
+    assert saved["status"] == "success"
+    assert saved["conclusion_status"] == "current_assessment"
+    assert saved["recorded_responses"][0]["answer"] == "Ten weeks; one vaccine."
+    assert (directory / "responses.json").read_bytes() == responses_before
+
+
+@pytest.mark.parametrize(
+    "payload", [{}, {"confirm_paid_request": False}, {"confirm_paid_request": True, "x": 1}]
+)
+def test_assessment_requires_explicit_confirmation(
+    runs: Path, client: TestClient, model: _FakeModel, payload: dict[str, Any]
+) -> None:
+    directory = _round_1(runs)
+    _answer_round_1(client)
+
+    response = client.post(f"/clarifications/{_ROUND_1}/reassessments", json=payload)
+
+    assert response.status_code == 422
+    assert model.calls == [] and _reassessments(directory) == []
+
+
+@pytest.mark.parametrize("answers", ["none", "all-deferred"])
+def test_nothing_usable_to_assess_makes_no_call(
+    runs: Path, client: TestClient, model: _FakeModel, answers: str
+) -> None:
+    directory = _round_1(runs)
+    if answers == "all-deferred":
+        for qid in ("q1", "q2", "q3"):
+            _answer(client, _ROUND_1, qid, {"status": "deferred"})
+
+    response = client.post(f"/clarifications/{_ROUND_1}/reassessments", json=_CONFIRM)
+
+    assert response.status_code == 409
+    assert "Nothing to assess" in response.json()["detail"]
+    assert "No request was made" in response.json()["detail"]
+    assert model.calls == [] and _reassessments(directory) == []
+
+
+def test_missing_model_configuration_makes_no_call(
+    runs: Path, client: TestClient, model: _FakeModel, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    directory = _round_1(runs)
+    _answer_round_1(client)
+    monkeypatch.delenv("ANTHROPIC_API_KEY")
+
+    response = client.post(f"/clarifications/{_ROUND_1}/reassessments", json=_CONFIRM)
+
+    assert response.status_code == 503
+    assert "No request was made" in response.json()["detail"]
+    assert "ANTHROPIC" not in response.json()["detail"]
+    assert model.calls == [] and _reassessments(directory) == []
+
+
+@pytest.mark.parametrize(
+    ("text", "stop_reason", "reason"),
+    [
+        (f'{{"remaining_considerations": ["{_SECRET}', "max_tokens", "cut off"),
+        (f"Not JSON: {_SECRET}", "end_turn", "expected assessment format"),
+    ],
+)
+def test_failed_assessment_is_saved_and_explained_without_model_text(
+    runs: Path,
+    client: TestClient,
+    model: _FakeModel,
+    text: str,
+    stop_reason: StopReason,
+    reason: str,
+) -> None:
+    directory = _round_1(runs)
+    _answer_round_1(client)
+    model.outcomes.append(_message(text, stop_reason))
+
+    response = client.post(f"/clarifications/{_ROUND_1}/reassessments", json=_CONFIRM)
+
+    assert response.status_code == 502
+    detail = response.json()["detail"]
+    assert reason in detail and "nothing was retried" in detail
+    assert _SECRET not in detail
+    assert len(model.calls) == 1
+    (saved,) = _reassessments(directory)
+    assert saved["status"] == "failed" and saved["report"] is None
+    assert f"reassessment-{saved['reassessment_id']}.json" in detail
+    assert _responses(directory)["q1"] == ("answered", "Ten weeks; one vaccine.")
+
+
+def test_one_assessment_at_a_time_and_answers_are_frozen_while_it_runs(
+    runs: Path, client: TestClient, model: _FakeModel
+) -> None:
+    directory = _round_1(runs)
+    _answer_round_1(client)
+    model.outcomes.append(_message(json.dumps(_ROUND_1_REPORT)))
+    model.release.clear()
+    first: dict[str, Any] = {}
+
+    def run_first() -> None:
+        response = client.post(f"/clarifications/{_ROUND_1}/reassessments", json=_CONFIRM)
+        first.update(status=response.status_code, body=response.json())
+
+    thread = threading.Thread(target=run_first)
+    thread.start()
+    assert model.started.wait(5)
+    try:
+        # A second request (another tab) is refused without a call.
+        second = client.post(f"/clarifications/{_ROUND_1}/reassessments", json=_CONFIRM)
+        assert second.status_code == 409
+        assert "already running" in second.json()["detail"]
+        # Answers can't change through the API while it runs.
+        change = client.put(
+            f"/clarifications/{_ROUND_1}/responses/q2",
+            json={"status": "answered", "answer": "The spare room."},
+        )
+        assert change.status_code == 409
+        assert "Nothing was saved" in change.json()["detail"]
+        assert client.get(f"/clarifications/{_ROUND_1}").json()["assessment_running"] is True
+        # An edit outside the API (by hand or the CLI) can't be prevented; it's reported.
+        data = json.loads((directory / "responses.json").read_text())
+        data["responses"][1].update(status="answered", answer="Edited by hand.")
+        (directory / "responses.json").write_text(json.dumps(data))
+    finally:
+        model.release.set()
+        thread.join(5)
+
+    assert first["status"] == 200
+    assert len(model.calls) == 1
+    assert first["body"]["answers_changed_during_assessment"] is True
+    assessed = {r["question_id"]: r["status"] for r in first["body"]["assessed_responses"]}
+    assert assessed["q2"] == "dont_know"  # the snapshot taken at the start
+    (saved,) = _reassessments(directory)
+    assert saved["recorded_responses"][1]["status"] == "dont_know"
+    # Afterwards, answers can change again and nothing is marked as running.
+    assert client.get(f"/clarifications/{_ROUND_1}").json()["assessment_running"] is False
+    _answer(client, _ROUND_1, "q3", {"status": "dont_know"})
+
+
+def test_round_2_assessment_keeps_lineage_and_carried_research(
+    runs: Path, client: TestClient, model: _FakeModel
+) -> None:
+    research: dict[str, Any] = {
+        "research_id": "research-20260101T000000Z-fixture",
+        "research_file": "research-fixture.json",
+        "sources": [{"id": "s1", "url": "https://example.org/fictional"}],
+        "questions": [],
+    }
+    directory = _round_2(runs, prior_research=research)
+    _answer(client, _ROUND_2, "q4", {"status": "answered", "answer": "Eleven weeks."})
+    model.outcomes.append(_message(json.dumps(_ROUND_2_REPORT)))
+
+    response = client.post(f"/clarifications/{_ROUND_2}/reassessments", json=_CONFIRM)
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["round"] == 2
+    assert body["conclusion_status"] == "review_conclusion"
+    assert body["used_research"] is True
+    assert body["closing_note"] == clarification.NO_OPEN_CONCERNS_NOTE
+    assert [(r["question_id"], r["round"], r["status"]) for r in body["assessed_responses"]] == [
+        ("q1", 1, "answered"),
+        ("q2", 1, "dont_know"),
+        ("q3", 1, "deferred"),
+        ("q4", 2, "answered"),
+    ]
+    content = model.user_content()
+    assert "The kitten is 1.5 months old." in content  # round-1 answer carried forward
+    assert "Eleven weeks." in content
+    assert research["research_id"] in content
+    (saved,) = _reassessments(directory)
+    assert saved["clarification_round"] == 2
+    assert saved["conclusion_status"] == "review_conclusion"
+    assert [(r["question_id"], r["round"]) for r in saved["recorded_responses"]] == [
+        ("q1", 1),
+        ("q2", 1),
+        ("q3", 1),
+        ("q4", 2),
+    ]
+    assert saved["research"]["carried_forward_from_round"] == 1
+
+
+def test_assessing_an_unknown_batch_makes_no_call(client: TestClient, model: _FakeModel) -> None:
+    response = client.post(
+        "/clarifications/clarify-20990101T000000Z-ffffff/reassessments", json=_CONFIRM
+    )
+    assert response.status_code == 404
+    assert model.calls == []

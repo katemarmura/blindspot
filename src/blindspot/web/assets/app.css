@@ -1,0 +1,581 @@
+/* Blindspot answering screen. Calm, minimal, one question at a time.
+ *
+ * Colour (contrast ratios against the colour they sit on; WCAG AA needs 4.5:1 for text,
+ * 3:1 for focus indicators and other non-text cues):
+ *   --accent        #F97316  bright orange: fills only, always with --text on top (6.2:1)
+ *   --accent-hover  #EA580C  hover fill, with --text on top (4.9:1)
+ *   --accent-strong #C2410C  focus rings, orange borders and small orange text on white (5.2:1)
+ *   --text          #1C1917  body text on --bg (16.7:1)
+ *   --muted         #57534E  secondary text on --bg (7.3:1)
+ *   --border-strong #78716C  field and button borders on white (4.8:1)
+ * Orange is never used for body text.
+ */
+
+:root {
+  color-scheme: light;
+  --bg: #fafaf9;
+  --surface: #ffffff;
+  --text: #1c1917;
+  --muted: #57534e;
+  --border: #e7e5e4;
+  --border-strong: #78716c;
+  --accent: #f97316;
+  --accent-hover: #ea580c;
+  --accent-strong: #c2410c;
+  --accent-soft: #fff7ed;
+  --accent-ink: #9a3412;
+  --danger: #b91c1c;
+  --danger-soft: #fef2f2;
+  --radius: 0.75rem;
+  --focus: 3px solid var(--accent-strong);
+  font-family:
+    system-ui,
+    -apple-system,
+    "Segoe UI",
+    Roboto,
+    sans-serif;
+  font-size: 100%;
+  line-height: 1.6;
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+}
+
+[hidden] {
+  display: none !important;
+}
+
+/* Layout */
+
+.site-header,
+main {
+  width: min(40rem, 100% - 2rem);
+  margin-inline: auto;
+}
+
+.site-header {
+  display: flex;
+  align-items: baseline;
+  gap: 0.75rem;
+  padding-block: 2rem 1.5rem;
+}
+
+.brand {
+  margin: 0;
+  font-weight: 700;
+  font-size: 1.125rem;
+  letter-spacing: -0.01em;
+}
+
+.brand::before {
+  content: "";
+  display: inline-block;
+  width: 0.625rem;
+  height: 0.625rem;
+  margin-right: 0.5rem;
+  border-radius: 50%;
+  background: var(--accent);
+}
+
+.tagline {
+  margin: 0;
+  color: var(--muted);
+}
+
+main {
+  padding-bottom: 4rem;
+}
+
+h1,
+h2 {
+  line-height: 1.3;
+  letter-spacing: -0.01em;
+}
+
+.panel,
+.card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: clamp(1.25rem, 4vw, 2rem);
+}
+
+.panel h1 {
+  margin-top: 0;
+  font-size: 1.375rem;
+}
+
+.prose {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.hint {
+  margin: 0.25rem 0 0.75rem;
+  color: var(--muted);
+  font-size: 0.9375rem;
+}
+
+/* Progress */
+
+.progress-row {
+  margin-bottom: 1.25rem;
+}
+
+.progress-text {
+  margin: 0 0 0.5rem;
+  color: var(--muted);
+  font-size: 0.9375rem;
+}
+
+progress {
+  display: block;
+  width: 100%;
+  height: 0.375rem;
+  border: none;
+  border-radius: 999px;
+  background: var(--border);
+  overflow: hidden;
+  appearance: none;
+}
+
+progress::-webkit-progress-bar {
+  background: var(--border);
+}
+
+progress::-webkit-progress-value {
+  background: var(--accent);
+}
+
+progress::-moz-progress-bar {
+  background: var(--accent);
+}
+
+/* Plan */
+
+.plan {
+  margin-bottom: 1.25rem;
+  color: var(--muted);
+}
+
+.plan p {
+  margin: 0.5rem 0 0;
+  color: var(--text);
+}
+
+/* Question card */
+
+.perspectives-label {
+  margin: 0 0 0.375rem;
+  color: var(--muted);
+  font-size: 0.875rem;
+}
+
+.perspectives {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  margin: 0 0 1rem;
+  padding: 0;
+  list-style: none;
+}
+
+.perspectives li {
+  padding: 0.125rem 0.625rem;
+  border: 1px solid var(--accent-strong);
+  border-radius: 999px;
+  background: var(--accent-soft);
+  color: var(--accent-ink);
+  font-size: 0.875rem;
+  font-weight: 600;
+}
+
+.question {
+  margin: 0 0 0.75rem;
+  font-size: clamp(1.25rem, 3.5vw, 1.5rem);
+  overflow-wrap: anywhere;
+}
+
+/* Headings receive focus from script (tabindex="-1") so screen readers start there;
+   they aren't controls, so they get no focus ring. */
+[tabindex="-1"]:focus,
+[tabindex="-1"]:focus-visible {
+  outline: none;
+}
+
+.current-status {
+  margin: 0 0 1rem;
+}
+
+.why-heading {
+  margin: 1.25rem 0 0.25rem;
+  font-size: 0.875rem;
+  font-weight: 600;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.why {
+  margin: 0 0 1.5rem;
+}
+
+/* Forms */
+
+label {
+  display: block;
+  font-weight: 600;
+}
+
+input[type="text"],
+textarea {
+  display: block;
+  width: 100%;
+  padding: 0.75rem;
+  border: 1px solid var(--border-strong);
+  border-radius: 0.5rem;
+  background: var(--surface);
+  color: var(--text);
+  font: inherit;
+}
+
+textarea {
+  resize: vertical;
+  min-height: 7rem;
+}
+
+input[aria-invalid="true"],
+textarea[aria-invalid="true"] {
+  border-color: var(--danger);
+}
+
+.field-error {
+  margin: 0.5rem 0 0;
+  color: var(--danger);
+  font-weight: 600;
+}
+
+.save-error {
+  margin: 1rem 0 0;
+  padding: 0.75rem 1rem;
+  border-left: 4px solid var(--danger);
+  border-radius: 0.25rem;
+  background: var(--danger-soft);
+  color: var(--danger);
+}
+
+.notice {
+  padding: 1rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+}
+
+/* Buttons */
+
+.actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.75rem;
+  margin-top: 1.25rem;
+}
+
+.secondary-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
+.button {
+  min-height: 2.75rem;
+  padding: 0.5rem 1.125rem;
+  border-radius: 0.5rem;
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.button.primary {
+  border: 1px solid var(--accent-strong);
+  background: var(--accent);
+  color: var(--text);
+}
+
+.button.primary:hover:not(:disabled) {
+  background: var(--accent-hover);
+}
+
+.button.secondary {
+  border: 1px solid var(--border-strong);
+  background: var(--surface);
+  color: var(--text);
+  font-weight: 500;
+}
+
+.button.secondary:hover:not(:disabled) {
+  border-color: var(--text);
+}
+
+.button.small {
+  min-height: 2.25rem;
+  padding: 0.25rem 0.75rem;
+  font-size: 0.9375rem;
+}
+
+.button:disabled {
+  cursor: progress;
+  opacity: 0.6;
+}
+
+.link-button {
+  padding: 0;
+  border: none;
+  background: none;
+  color: var(--text);
+  font: inherit;
+  text-decoration: underline;
+  text-underline-offset: 0.2em;
+  cursor: pointer;
+}
+
+#open-form input {
+  margin-bottom: 1rem;
+}
+
+/* Visible keyboard focus everywhere */
+
+:focus-visible {
+  outline: var(--focus);
+  outline-offset: 2px;
+}
+
+.skip-link {
+  position: absolute;
+  left: 1rem;
+  top: -3rem;
+  padding: 0.5rem 1rem;
+  background: var(--surface);
+  color: var(--text);
+}
+
+.skip-link:focus {
+  top: 1rem;
+}
+
+/* Review lists */
+
+.review {
+  margin-top: 1.5rem;
+  padding: 1rem 1.25rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+}
+
+summary {
+  cursor: pointer;
+  font-weight: 600;
+}
+
+.answer-list {
+  margin: 1rem 0 0;
+  padding-left: 1.25rem;
+}
+
+.answer-item + .answer-item {
+  margin-top: 1rem;
+  padding-top: 1rem;
+  border-top: 1px solid var(--border);
+}
+
+.answer-item p {
+  margin: 0 0 0.375rem;
+}
+
+.answer-question {
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+
+.answer-text {
+  color: var(--muted);
+}
+
+.status-badge {
+  display: inline-block;
+  padding: 0 0.5rem;
+  border: 1px solid var(--border-strong);
+  border-radius: 999px;
+  font-size: 0.8125rem;
+  font-weight: 600;
+}
+
+.status-badge[data-status="deferred"] {
+  border-color: var(--accent-strong);
+  background: var(--accent-soft);
+  color: var(--accent-ink);
+}
+
+.status-badge[data-status="none"] {
+  border-style: dashed;
+  color: var(--muted);
+}
+
+#done-card h1 {
+  margin-top: 0;
+  font-size: 1.375rem;
+}
+
+.switch-batch {
+  margin-top: 2rem;
+  color: var(--muted);
+}
+
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+/* Assessment */
+
+.card + .card {
+  margin-top: 1.5rem;
+}
+
+.section-title {
+  margin: 0 0 0.75rem;
+  font-size: 1.25rem;
+}
+
+.inline-note {
+  padding: 0.75rem 1rem;
+  border-left: 4px solid var(--accent-strong);
+  border-radius: 0.25rem;
+  background: var(--accent-soft);
+}
+
+.cost-note {
+  margin: 1rem 0 0.75rem;
+}
+
+.waiting {
+  margin: 1rem 0 0;
+  color: var(--muted);
+}
+
+.result-kicker {
+  margin: 0 0 0.25rem;
+  color: var(--muted);
+  font-size: 0.875rem;
+}
+
+.takeaway {
+  display: grid;
+  gap: 1rem;
+  margin: 1rem 0;
+}
+
+.takeaway dt {
+  color: var(--muted);
+  font-size: 0.875rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.takeaway dd {
+  margin: 0.25rem 0 0;
+  font-size: 1.0625rem;
+}
+
+#takeaway-blind-spot {
+  font-weight: 600;
+  font-size: 1.1875rem;
+}
+
+.status-badge[data-status="open"] {
+  border-color: var(--accent-strong);
+  background: var(--accent-soft);
+  color: var(--accent-ink);
+}
+
+.status-badge[data-status="partly_addressed"] {
+  border-style: dashed;
+  border-color: var(--accent-strong);
+  color: var(--accent-ink);
+}
+
+.closing-note {
+  font-weight: 600;
+}
+
+.result-section {
+  padding-block: 0.75rem;
+  border-top: 1px solid var(--border);
+}
+
+.result-section:last-of-type {
+  border-bottom: 1px solid var(--border);
+}
+
+.result-list {
+  margin: 0.75rem 0 0;
+  padding-left: 1.25rem;
+}
+
+.result-list li + li {
+  margin-top: 0.75rem;
+}
+
+.result-list p {
+  margin: 0.125rem 0 0;
+  overflow-wrap: anywhere;
+}
+
+.result-list .item-title {
+  font-weight: 600;
+}
+
+.result-list .item-why {
+  color: var(--muted);
+}
+
+#result-next {
+  margin-top: 1rem;
+}
+
+@media (max-width: 30rem) {
+  .actions,
+  .secondary-actions {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .button {
+    width: 100%;
+  }
+
+  .site-header {
+    padding-block: 1.25rem 1rem;
+  }
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .button {
+    transition: background-color 120ms ease, border-color 120ms ease;
+  }
+}

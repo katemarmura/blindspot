@@ -1,0 +1,227 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Blindspot · Clarifying questions</title>
+    <link rel="stylesheet" href="/ui/assets/app.css" />
+    <script type="module" src="/ui/assets/app.mjs"></script>
+  </head>
+  <body>
+    <a class="skip-link" href="#main">Skip to content</a>
+    <header class="site-header">
+      <p class="brand">Blindspot</p>
+      <p class="tagline">Clarifying questions</p>
+    </header>
+
+    <main id="main" tabindex="-1">
+      <noscript>
+        <p class="notice">This page needs JavaScript to load and save your answers.</p>
+      </noscript>
+
+      <!-- Choose a batch -->
+      <section id="open-view" class="panel" aria-labelledby="open-title" hidden>
+        <h1 id="open-title">Open a question batch</h1>
+        <form id="open-form" novalidate>
+          <label for="batch-id">Batch ID</label>
+          <p id="batch-id-hint" class="hint">
+            The name of the batch's folder, for example clarify-20261009T140042Z-6b0833.
+          </p>
+          <input
+            id="batch-id"
+            name="batch"
+            type="text"
+            autocomplete="off"
+            spellcheck="false"
+            aria-describedby="batch-id-hint batch-id-error"
+            required
+          />
+          <p id="batch-id-error" class="field-error" hidden></p>
+          <button type="submit" class="button primary">Open batch</button>
+        </form>
+      </section>
+
+      <!-- Loading -->
+      <section id="loading-view" class="panel" hidden>
+        <p role="status">Loading your questions…</p>
+      </section>
+
+      <!-- Load failure -->
+      <section id="error-view" class="panel" aria-labelledby="error-title" hidden>
+        <h1 id="error-title" tabindex="-1"></h1>
+        <p id="error-message"></p>
+        <div class="actions">
+          <button id="retry-load" type="button" class="button primary">Try again</button>
+          <button type="button" class="button secondary" data-open-another>
+            Open another batch
+          </button>
+        </div>
+      </section>
+
+      <!-- The batch -->
+      <section id="batch-view" hidden>
+        <div class="progress-row">
+          <p id="progress-text" class="progress-text"></p>
+          <progress id="progress-bar" max="1" value="0" aria-labelledby="progress-text"></progress>
+        </div>
+
+        <details class="plan">
+          <summary>Your plan</summary>
+          <p id="plan-text" class="prose"></p>
+        </details>
+
+        <!-- One question at a time -->
+        <article id="question-card" class="card" aria-labelledby="question-text" hidden>
+          <p class="perspectives-label" id="perspectives-label">From the perspective of</p>
+          <ul id="perspectives" class="perspectives" aria-labelledby="perspectives-label"></ul>
+          <h1 id="question-text" class="question" tabindex="-1"></h1>
+          <p id="current-status" class="current-status" hidden></p>
+
+          <h2 class="why-heading">Why it matters</h2>
+          <p id="why-text" class="prose why"></p>
+
+          <form id="answer-form" novalidate>
+            <label for="answer-text">Your answer</label>
+            <p id="answer-hint" class="hint">
+              If you choose “Not applicable”, anything typed here is saved as your
+              explanation. “I don't know” and “Save for later” don't save typed text.
+            </p>
+            <textarea
+              id="answer-text"
+              name="answer"
+              rows="5"
+              aria-describedby="answer-hint answer-error"
+            ></textarea>
+            <p id="answer-error" class="field-error" hidden></p>
+
+            <div class="actions">
+              <button type="submit" class="button primary" data-action="answered">
+                Save answer
+              </button>
+              <div class="secondary-actions" role="group" aria-label="Other responses">
+                <button type="button" class="button secondary" data-action="dont_know">
+                  I don't know
+                </button>
+                <button type="button" class="button secondary" data-action="not_applicable">
+                  Not applicable
+                </button>
+                <button type="button" class="button secondary" data-action="deferred">
+                  Save for later
+                </button>
+              </div>
+            </div>
+            <p id="save-error" class="save-error" role="alert" hidden></p>
+          </form>
+        </article>
+
+        <!-- Nothing left unanswered -->
+        <section id="done-card" class="card" aria-labelledby="done-title" hidden>
+          <h1 id="done-title" tabindex="-1"></h1>
+          <p id="done-summary"></p>
+          <p id="done-deferred" hidden></p>
+        </section>
+
+        <!-- The assessment result -->
+        <section id="result-card" class="card result" aria-labelledby="result-title" hidden>
+          <p id="result-kicker" class="result-kicker"></p>
+          <h2 id="result-title" class="section-title" tabindex="-1"></h2>
+          <p id="result-changed" class="inline-note" hidden></p>
+
+          <dl id="takeaway" class="takeaway">
+            <div>
+              <dt>Blind spot</dt>
+              <dd id="takeaway-blind-spot" class="prose"></dd>
+            </div>
+            <div>
+              <dt>Why it mattered</dt>
+              <dd id="takeaway-why" class="prose"></dd>
+            </div>
+            <div>
+              <dt>Status</dt>
+              <dd>
+                <span id="takeaway-status" class="status-badge"></span>
+                <span id="takeaway-explanation" class="prose"></span>
+              </dd>
+            </div>
+          </dl>
+          <p id="takeaway-none" hidden>
+            This assessment has no takeaway because it lists no concerns or uncertainties.
+          </p>
+          <p id="closing-note" class="closing-note" hidden></p>
+
+          <details class="result-section">
+            <summary id="remaining-summary"></summary>
+            <ul id="remaining-list" class="result-list"></ul>
+          </details>
+          <details class="result-section">
+            <summary id="addressed-summary"></summary>
+            <ul id="addressed-list" class="result-list"></ul>
+          </details>
+          <details class="result-section">
+            <summary id="unresolved-summary"></summary>
+            <ul id="unresolved-list" class="result-list"></ul>
+          </details>
+
+          <p id="result-next" class="hint"></p>
+        </section>
+
+        <!-- Explicitly assess this round's answers (one paid request) -->
+        <section id="assess-card" class="card" aria-labelledby="assess-title" hidden>
+          <h2 id="assess-title" class="section-title">Assess my answers</h2>
+          <p>
+            Blindspot can update the original concerns using your plan, the findings, and the
+            answers saved so far.
+          </p>
+          <p id="assess-deferred" class="inline-note" hidden></p>
+          <p id="assess-ineligible" hidden></p>
+          <p id="assess-elsewhere" class="inline-note" hidden>
+            An assessment of this batch is already running, perhaps in another tab. Its result
+            will be saved in the batch folder, but this screen can't show it. Answers can't
+            be changed until it finishes; reload the page later.
+          </p>
+          <div id="assess-action">
+            <p id="assess-cost" class="cost-note">
+              <strong>This makes one paid model request.</strong> It runs only when you press
+              the button and is never repeated automatically.
+            </p>
+            <button id="assess-button" type="button" class="button primary">
+              Assess my answers
+            </button>
+          </div>
+          <p id="assess-waiting" class="waiting" role="status" hidden>
+            Assessing your answers. This can take up to a minute. Your answers can't be
+            changed until it finishes. If you leave or reload, the result is still saved in the
+            batch folder, but this screen won't show it.
+          </p>
+          <p id="assess-error" class="save-error" role="alert" hidden></p>
+        </section>
+
+
+        <details id="review" class="review">
+          <summary>Review this round's answers</summary>
+          <ol id="review-list" class="answer-list"></ol>
+        </details>
+
+        <details id="prior" class="review" hidden>
+          <summary>Earlier answers (round 1, read-only)</summary>
+          <ol id="prior-list" class="answer-list"></ol>
+        </details>
+
+        <p class="switch-batch">
+          <button type="button" class="link-button" data-open-another>Open another batch</button>
+        </p>
+      </section>
+
+      <p id="announcer" class="visually-hidden" role="status" aria-live="polite"></p>
+    </main>
+
+    <template id="answer-item">
+      <li class="answer-item">
+        <p class="answer-question"></p>
+        <p class="answer-meta"><span class="status-badge"></span></p>
+        <p class="answer-text prose" hidden></p>
+        <button type="button" class="button small secondary" hidden></button>
+      </li>
+    </template>
+  </body>
+</html>

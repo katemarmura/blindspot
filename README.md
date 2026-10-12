@@ -17,7 +17,8 @@ that runs one to three perspectives concurrently. You either name them yourself 
 team-selector call propose them (`--auto-team`, which also synthesizes the results).
 There's also a small model-comparison command (`blindspot.compare`) and one manual
 clarification round over a saved auto-team run (`blindspot.clarification`), whose saved
-batches can also be viewed and answered over HTTP. No cross-review, UI, or database yet.
+batches can also be answered in a minimal browser screen (over a small HTTP API). No
+cross-review or database yet.
 
 **Planned experience:** guided clarification, with one question at a time and a short
 conclusion informed by the user's answers. This is not implemented in the current CLI.
@@ -425,11 +426,68 @@ If no response arrived, those response fields are `null` rather than looking lik
 empty response. Only counts and types are saved, never the returned text or thinking
 content. A failed step prints a short call/response summary to stderr.
 
+#### Answering screen (browser)
+
+A single page for answering a saved batch, one question at a time, and then, only if you
+ask, assessing your answers. It uses the HTTP API below. Answering needs no API key and
+makes no model calls; assessing makes one paid request on the server (see below).
+
+```bash
+uv run uvicorn blindspot.main:app --reload   # from the repository root; reads ./runs
+```
+
+Open http://127.0.0.1:8000/ui and enter a batch ID (its folder name, such as
+`clarify-20261009T140042Z-6b0833`), or go straight to
+`http://127.0.0.1:8000/ui?batch=<batch-id>`. To try it without touching your own batches, use
+the copied fixture from the HTTP example below:
+http://127.0.0.1:8000/ui?batch=clarify-kitten-example.
+
+- **Each question** shows its perspective labels, why it matters, and a text box. "Save
+  answer" (primary) needs text. "Not applicable" saves anything typed as an optional
+  explanation. "I don't know" and "Save for later" save their status without text.
+- **Saving:** each response is saved straight away, and the screen moves on only after
+  the save succeeds. A failed save keeps your text and explains what to do; buttons are
+  disabled while a save is in progress.
+- **Resuming:** the batch ID is in the URL, so refreshing reopens the first unanswered
+  question.
+- **When nothing is unanswered**, you see a completion message. Questions saved for later
+  stay marked "Saved for later" and can be revisited. "Review this round's answers" lets
+  you change any of this round's responses.
+- **Follow-up batches** show round-1 answers in a collapsed, read-only "Earlier answers"
+  section.
+- **"Assess my answers"** appears once every question in the round has a response. It
+  runs the same reassessment as `reassess` (**one paid model request**, stated next to the
+  button, never retried or started automatically). Questions saved for later are listed as
+  not answered. If nothing usable is answered (everything saved for later), the screen
+  explains why and offers no button. While it runs (up to about a minute), the page shows
+  a waiting message and answers can't be changed, here or in another tab.
+- **The result** shows the takeaway first (blind spot, why it mattered, status, and its
+  explanation), labelled "Current assessment" after round 1 or "Conclusion of this review"
+  after a follow-up. Remaining concerns, addressed concerns, and unresolved uncertainties
+  are collapsible sections. It's saved as `reassessment-<id>.json` in the batch folder, like
+  the CLI's. A failure explains what went wrong without showing model output, keeps your
+  answers, and offers an explicit "Try again" (another paid request).
+- **Refreshing never repeats a paid request**, but the screen doesn't reload past results:
+  after a reload, a finished assessment is only in its saved file, and one still running
+  is shown as "already running" until it ends. Leaving the page doesn't cancel a running
+  assessment; its result is still saved.
+- The screen doesn't create plans or run research or follow-ups; use the CLI. A follow-up
+  batch's carried round-1 research is included automatically; other research files can
+  only be added with `reassess --research`.
+
+The page is plain HTML, CSS, and JavaScript modules in `src/blindspot/web/`, served by
+FastAPI with no build step or npm packages. It has a strict content security policy, and
+all saved text is shown as text, never as HTML. The colours and their contrast ratios are
+listed at the top of `src/blindspot/web/assets/app.css`. The bright orange `#F97316` is
+used for fills with dark text (6.2:1); the darker `#C2410C` is for focus rings and small
+orange details (5.2:1 on white).
+
 #### Answering over HTTP (local dev server)
 
-The FastAPI app can show a saved batch (round 1 or a follow-up) and save answers one at a
-time. It uses the same file, validation, and atomic writes as `answer`, and needs no API
-key. **No endpoint calls a model**: reassessment, research, and follow-ups stay CLI commands.
+The FastAPI app can show a saved batch (round 1 or a follow-up), save answers one at a
+time, and assess them. Viewing and saving use the same file, validation, and atomic writes
+as `answer` and need no API key. **Only the assessment endpoint calls a model** (one paid
+request, with the server's own key); research and follow-ups stay CLI commands.
 
 ```bash
 uv run uvicorn blindspot.main:app --reload   # from the repository root; reads ./runs
@@ -460,8 +518,9 @@ check `editable` in the `GET` response.
 
 | Endpoint | What it does |
 | --- | --- |
-| `GET /clarifications/{batch_id}` | Batch ID, `clarification_id`, `round`, `plan`, `responses_saved`, `next_question_id` (first question of this round with no response), and `questions`: `id`, `round`, `question`, `why_it_matters`, `perspectives`, `source_finding_ids`, `status`, `answer`, `editable`. Never creates files. |
-| `PUT /clarifications/{batch_id}/responses/{question_id}` | Body `{"status": …, "answer": …}`. Saves that one response in the batch's `responses.json` (created from the template if missing) and returns the updated batch. Other entries, the instructions, and the reference `question` fields are kept. |
+| `GET /clarifications/{batch_id}` | Batch ID, `clarification_id`, `round`, `plan`, `responses_saved`, `next_question_id` (first question of this round with no response), and `questions`: `id`, `round`, `question`, `why_it_matters`, `perspectives`, `source_finding_ids`, `status`, `answer`, `editable`; plus `assessment_running`. Never creates files. |
+| `PUT /clarifications/{batch_id}/responses/{question_id}` | Body `{"status": …, "answer": …}`. Saves that one response in the batch's `responses.json` (created from the template if missing) and returns the updated batch. Other entries, the instructions, and the reference `question` fields are kept. Refused (409) while an assessment of the batch is running. |
+| `POST /clarifications/{batch_id}/reassessments` | **One paid model request.** Body must be exactly `{"confirm_paid_request": true}`. Runs `reassess` on the batch's `clarification.json` and `responses.json` (a follow-up's carried research included), saves `reassessment-<id>.json`, and returns `reassessment_id`, `round`, `conclusion_status`, `report`, `closing_note`, `assessed_responses` (the answers used, both rounds in a follow-up), `answers_changed_during_assessment`, and `used_research`. One at a time per batch. |
 
 - **Statuses** are the response-file ones: `answered` (text required), `dont_know` (no text),
   `not_applicable` (optional explanation), `deferred` (no text), or `null` for unanswered.
@@ -474,6 +533,18 @@ check `editable` in the `GET` response.
   response file (reported and never overwritten), a round-1 question in a follow-up, or two
   batches with the same folder name; 403 if the batch or its files resolve outside `runs/`
   (for example through a symlink).
+- **Assessment** is refused before any request with 422 without the confirmation, 409 when
+  nothing usable is answered, the files are invalid, or one is already running, and 503 when
+  the server has no `ANTHROPIC_API_KEY`/`ANTHROPIC_MODEL`. A failed call returns 502 with an
+  explanation built from its diagnostics (never model text) and is saved like the CLI's.
+  Nothing is retried.
+- **Consistent answers:** while an assessment runs, `PUT` returns 409, so the saved
+  `recorded_responses` match what was assessed. Edits made outside the API during the call
+  (by hand or with the CLI) can't be blocked; the response then has
+  `answers_changed_during_assessment: true`.
+- **Limits:** the "running" guard lives in the server process (one uvicorn worker), not in
+  the files, so a CLI `reassess` of the same batch isn't blocked. A finished result isn't
+  served again; read the saved `reassessment-*.json`.
 - The interactive API docs are at http://127.0.0.1:8000/docs.
 
 ## Development commands
@@ -502,9 +573,11 @@ All checks run in CI on every push and pull request — see
 make verify
 ```
 
-This runs the CI checks locally, in CI's order, through the uv-managed environment:
-`ruff check .`, `ruff format --check .`, `mypy`, and `pytest`, each via `uv run --locked`. It
-never formats, auto-fixes, or rewrites `uv.lock` (an out-of-date lockfile makes it fail).
+This runs the CI checks locally, in CI's order: `ruff check .`, `ruff format --check .`,
+`mypy`, and `pytest`, each via `uv run --locked`, then the answering screen's checks with
+Node (`node --check` on its script and `node --test tests/ui/state.test.mjs`; Node 20 or
+later, no npm packages). It never formats, auto-fixes, or rewrites `uv.lock` (an
+out-of-date lockfile makes it fail).
 It makes no API calls. Every check runs even if an earlier one fails; failures are listed at
 the end, and the exit code is nonzero.
 
@@ -737,7 +810,8 @@ uv run --locked python .claude/skills/compare-research/compare_research.py \
 
 ```text
 src/blindspot/           # the blindspot package (src layout: importable only after install)
-src/blindspot/main.py    # FastAPI app: GET /health plus the batch-answering router
+src/blindspot/main.py    # FastAPI app: GET /health, the batch-answering router, the /ui screen
+src/blindspot/web/       # answering screen: index.html plus assets/ (CSS, JS modules; no build)
 src/blindspot/batch_api.py  # HTTP view/answer endpoints for one saved clarification batch
 src/blindspot/guided.py  # guided one-question-at-a-time answering CLI
 src/blindspot/config.py  # ANTHROPIC_API_KEY / ANTHROPIC_MODEL loading
@@ -752,6 +826,6 @@ src/blindspot/runs.py      # shared helpers for saving results under runs/
 src/blindspot/clarification.py  # clarification: prepare, reassess, one follow-up round
 src/blindspot/research.py  # optional, bounded current-source research (web search + fetch)
 src/blindspot/llm_smoke.py  # connection smoke-check CLI
-tests/                   # pytest suite
+tests/                   # pytest suite (tests/ui/: Node tests for the screen's logic)
 docs/                    # design notes and the original project brief
 ```

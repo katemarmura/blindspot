@@ -47,6 +47,12 @@ clarification batch (see `AGENTS.md`). Guidance for the first screen, not yet bu
 - Accessible text contrast. Orange is for accents and controls; body text stays a
   high-contrast neutral, and any text on orange or orange text must still meet WCAG AA.
 
+The first screen (`/ui`, answering a saved batch) follows this. Its bright orange
+`#F97316` is a fill under dark text (6.2:1). A darker `#C2410C` is used for focus rings,
+perspective-label borders, and small orange details (5.2:1 on white). Body text is
+`#1C1917` on `#FAFAF9`. The full palette and ratios are at the top of
+`src/blindspot/web/assets/app.css`.
+
 The original brief below preserves the initial exploration. Its architecture diagrams,
 limits, and statements about implementation status are historical proposals; consult
 `AGENTS.md` for current implementation scope and this update for the clarification direction.

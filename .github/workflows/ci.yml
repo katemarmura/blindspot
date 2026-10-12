@@ -30,3 +30,14 @@ jobs:
 
       - name: pytest
         run: uv run pytest
+
+      - name: Set up Node (UI checks only; no npm packages)
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: UI syntax
+        run: node --check src/blindspot/web/assets/app.mjs
+
+      - name: UI tests
+        run: node --test tests/ui/state.test.mjs

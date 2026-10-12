@@ -1,0 +1,217 @@
+// Pure helpers for the answering screen: no DOM, no network. Tested with `node --test`.
+//
+// The batch object is the API's BatchView (GET /clarifications/{batch_id}).
+// A question's `status` is "answered", "dont_know", "not_applicable", "deferred",
+// or null (not answered yet). Only `editable` questions belong to this round.
+
+export const STATUS_LABELS = Object.freeze({
+  answered: "Answered",
+  dont_know: "I don't know",
+  not_applicable: "Not applicable",
+  deferred: "Saved for later",
+});
+
+export function statusLabel(status) {
+  return STATUS_LABELS[status] ?? "Not answered yet";
+}
+
+export function editableQuestions(batch) {
+  return batch.questions.filter((q) => q.editable);
+}
+
+export function priorQuestions(batch) {
+  return batch.questions.filter((q) => !q.editable);
+}
+
+// The next unanswered question of this round: the first after `afterId` in order,
+// then from the start. Deferred questions have a response, so they're not "next";
+// they stay reachable through review. Returns null when nothing is unanswered.
+export function nextQuestionId(batch, afterId = null) {
+  const questions = editableQuestions(batch);
+  const start = questions.findIndex((q) => q.id === afterId) + 1;
+  const ordered = [...questions.slice(start), ...questions.slice(0, start)];
+  return ordered.find((q) => q.status === null)?.id ?? null;
+}
+
+export function progress(batch) {
+  const questions = editableQuestions(batch);
+  const count = (predicate) => questions.filter(predicate).length;
+  return {
+    total: questions.length,
+    responded: count((q) => q.status !== null),
+    deferred: count((q) => q.status === "deferred"),
+    unanswered: count((q) => q.status === null),
+  };
+}
+
+// The PUT body for an action, or an error message to show instead of saving.
+// "answer" needs text; "not_applicable" keeps optional text as its explanation;
+// "dont_know" and "deferred" never send text.
+export function buildUpdate(action, text) {
+  const trimmed = (text ?? "").trim();
+  switch (action) {
+    case "answered":
+      if (!trimmed) {
+        return { error: "Type an answer first, or choose one of the other options." };
+      }
+      return { body: { status: "answered", answer: trimmed } };
+    case "not_applicable":
+      return { body: { status: "not_applicable", answer: trimmed || null } };
+    case "dont_know":
+    case "deferred":
+      return { body: { status: action, answer: null } };
+    default:
+      return { error: "Unknown action." };
+  }
+}
+
+// The text box starts with the saved text for answers and explanations only.
+export function initialText(question) {
+  return question.status === "answered" || question.status === "not_applicable"
+    ? (question.answer ?? "")
+    : "";
+}
+
+// The API's error `detail`: a plain message string, or a list of validation errors.
+function detailText(detail) {
+  if (typeof detail === "string") return detail;
+  if (Array.isArray(detail)) {
+    const messages = detail.map((d) => d?.msg).filter((m) => typeof m === "string");
+    if (messages.length) return messages.join("; ");
+  }
+  return null;
+}
+
+// What to show when loading a batch fails. `failure` is {network: true} or
+// {status, detail}. Returns {title, message, retry}.
+export function describeLoadError(failure) {
+  if (failure.network) {
+    return {
+      title: "Can't reach Blindspot",
+      message: "The server didn't respond. Check that it's running, then try again.",
+      retry: true,
+    };
+  }
+  const detail = detailText(failure.detail);
+  if (failure.status === 404) {
+    return {
+      title: "Batch not found",
+      message: "No saved batch has that ID. Check the ID (it starts with clarify-) and try again.",
+      retry: false,
+    };
+  }
+  if (failure.status === 403 || failure.status === 409) {
+    return {
+      title: "This batch can't be opened",
+      message: detail ?? "Its saved files are invalid. Fix them, then reload.",
+      retry: true,
+    };
+  }
+  return {
+    title: "Something went wrong",
+    message: "The server couldn't load this batch. Try again in a moment.",
+    retry: true,
+  };
+}
+
+// What to show when saving fails; the typed text is always kept.
+export function describeSaveError(failure) {
+  const keep = "Your text is still here; nothing was lost.";
+  if (failure.network) {
+    return `Couldn't save: the server didn't respond. ${keep} Try again when it's back.`;
+  }
+  const detail = detailText(failure.detail);
+  if (failure.status === 422 && detail) {
+    return `Couldn't save: ${detail}. ${keep}`;
+  }
+  if ((failure.status === 403 || failure.status === 404 || failure.status === 409) && detail) {
+    return `Couldn't save: ${detail} ${keep}`;
+  }
+  return `Couldn't save because of a server error. ${keep} Try again.`;
+}
+
+// --- Assessment ---
+
+// Mirrors the server's rule: an assessment needs at least one response in this round
+// that isn't "saved for later" ("I don't know" and "not applicable" count).
+export function assessmentEligibility(batch) {
+  const questions = editableQuestions(batch);
+  const deferred = questions.filter((q) => q.status === "deferred").length;
+  const usable = questions.filter((q) => q.status !== null && q.status !== "deferred").length;
+  if (questions.length === 0) {
+    return { eligible: false, deferred, reason: "This batch has no questions to assess." };
+  }
+  if (usable === 0) {
+    return {
+      eligible: false,
+      deferred,
+      reason:
+        "There's nothing to assess yet: every question is saved for later. Answer at least " +
+        "one (“I don't know” and “Not applicable” count) to get an assessment.",
+    };
+  }
+  return { eligible: true, deferred, reason: null };
+}
+
+export function conclusionHeading(conclusionStatus) {
+  return conclusionStatus === "review_conclusion" ? "Conclusion of this review" : "Current assessment";
+}
+
+export const TAKEAWAY_STATUS_LABELS = Object.freeze({
+  open: "Open",
+  partly_addressed: "Partly addressed",
+  addressed: "Addressed",
+});
+
+export function takeawayStatusLabel(status) {
+  return TAKEAWAY_STATUS_LABELS[status] ?? "Unknown";
+}
+
+// What to show when an assessment request fails. The server's messages for these
+// statuses are written for people and contain no model output.
+export function describeAssessmentError(failure) {
+  if (failure.network) {
+    return (
+      "The server didn't respond, so the outcome isn't known: the assessment may still " +
+      "have run, and any result is saved in the batch folder. Trying again makes another " +
+      "paid request."
+    );
+  }
+  const detail = detailText(failure.detail);
+  if (detail && [403, 404, 409, 422, 502, 503].includes(failure.status)) return detail;
+  return (
+    "The assessment couldn't be completed because of a server error. Your answers are " +
+    "still saved. Trying again makes another paid request."
+  );
+}
+
+// Guards against late responses. Every navigation (opening a batch, going back or
+// forward, retrying, returning to the form) starts a new generation; a request remembers
+// the generation it started in, and its result is applied only if that is still current.
+// `begin` also aborts the previous generation's loads. Saves are never aborted (a cancelled
+// write might still have been stored); their late results are just ignored.
+export function createNavigation() {
+  let generation = 0;
+  let controller = null;
+  return {
+    begin() {
+      controller?.abort();
+      controller = new AbortController();
+      generation += 1;
+      return { id: generation, signal: controller.signal };
+    },
+    // A ticket for work that belongs to the current navigation without starting a new
+    // one (a save); it has no signal, because saves are never aborted.
+    current() {
+      return { id: generation, signal: null };
+    },
+    isCurrent(ticket) {
+      return ticket.id === generation;
+    },
+  };
+}
+
+// Batch IDs are folder names like clarify-20261009T140042Z-6b0833 (mirrors the API).
+export function isPlausibleBatchId(value) {
+  return /^clarify-[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/.test(value);
+}

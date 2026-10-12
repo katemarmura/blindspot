@@ -32,18 +32,21 @@ Implemented so far, all manual (`blindspot.clarification`, below):
 - **one** optional follow-up batch (round 2), started from a successful round-1
   reassessment and reassessed with the answers from both rounds.
 
-One-question-at-a-time answering exists in the terminal (`answer`) and over HTTP (view and
-save one response; see `batch_api.py` below). Not yet implemented: a UI, suggested answers,
-more than one follow-up round, automatic stopping between rounds, and a tailored final
-conclusion. The intended first screen is described in `docs/project-brief.md` (UI
+One-question-at-a-time answering exists in the terminal (`answer`), over HTTP (view and
+save one response; see `batch_api.py` below), and in a minimal browser screen at `/ui` that
+uses that API. The UI also supports explicitly starting reassessment and displaying its
+result. Not yet implemented: a plan-entry screen, starting follow-ups from the UI,
+suggested answers, more than one follow-up round, automatic stopping between
+rounds, and a tailored final conclusion. Design guidance is in `docs/project-brief.md` (UI
 direction). Preserve the existing CLI as a baseline; do not speculatively add a database,
 framework, or automatic multi-round loop. Keep user answers distinct from expert
 assumptions, and retain links to original findings.
 
 ## Current scope: minimal server, a single-expert experiment, a multi-expert runner (manual or auto-selected team), a model-comparison CLI, and a manual clarification round with one follow-up
 
-**As of now, this repository contains a project scaffold, a small FastAPI server (health
-plus viewing and answering a saved clarification batch; no model calls), and one
+**As of now, this repository contains a project scaffold, a small FastAPI server (health,
+viewing, answering, and explicitly assessing a saved clarification batch, and a minimal
+screen at `/ui`; only the assessment endpoint calls a model), and one
 small domain contract with one real LLM call (plus at most one bounded recovery call)
 built on it. It runs alone, concurrently for 1–3 caller-supplied perspectives, for a
 1–3 expert team proposed by one team-selector call (followed by one synthesis call), or
@@ -403,10 +406,59 @@ What exists:
     - `runs.write_json` (used by every writer) writes through a fresh, uniquely named
       temporary file opened with `O_EXCL | O_NOFOLLOW`, so a planted file or symlink is
       never written through. `_read_json` reports invalid UTF-8 as an unreadable file.
-    - Writes are serialized by one lock per app. No endpoint calls a model, launches
-      research, reassessment, or follow-ups, or loads credentials.
+    - Writes are serialized by one lock per app.
+    - **`POST /clarifications/{batch_id}/reassessments`** (body exactly
+      `{"confirm_paid_request": true}`) is the only endpoint that calls a model. It runs
+      the existing `reassess()` on the batch's artifact and `responses.json`: round-2
+      accumulation and carried `prior_research` come along; there's no research
+      selection. Before any request it refuses invalid files, nothing usable to assess
+      (`has_new_context`; 409), and missing configuration (`ValueError` → 503, generic
+      text). `BatchStore.running` (resolved folders, under the same lock) allows one
+      assessment per batch; while running, `PUT` is a 409 and `GET` reports
+      `assessment_running`, so the snapshot `reassess` reads is the one it records. The call
+      runs in a shielded task whose done-callback clears the flag, so a client disconnect
+      can't lose the saved file. A failed call is a 502 whose text comes from diagnostics
+      (`_failure_message`), never model output. Success returns `AssessmentView`
+      (`report`, `conclusion_status`, `closing_note` = `NO_OPEN_CONCERNS_NOTE` when
+      nothing remains, `assessed_responses`, `answers_changed_during_assessment` for
+      out-of-band edits, `used_research`). The guard is per process and doesn't cover a
+      concurrent CLI `reassess`.
     - **Covered by** `tests/test_batch_api.py` (TestClient over copies of the kitten
       fixture in `tmp_path`).
+  - **Answering screen (`src/blindspot/web/`, served at `/ui`; `/` redirects there):**
+    - **What it is:** one page using only the endpoints above. It opens a batch by ID
+      (kept in `?batch=` so a refresh resumes) and shows one editable question at a time,
+      with perspective labels, why it matters, progress, and the plan in a collapsed section.
+    - **Actions:** "Save answer" needs text; "Not applicable" sends typed text as its
+      optional explanation; "I don't know" and "Save for later" send no text. It advances
+      only after a successful PUT, keeps typed text on failure, and disables actions (and
+      makes the text box read-only) while saving.
+    - **Late responses:** every navigation (opening a batch, back/forward, retry, returning
+      to the form) starts a new generation (`createNavigation` in `state.mjs`). Loads and
+      saves apply their result only if their generation is still current. Pending loads
+      are aborted; pending saves aren't (the write may still be stored), but their result
+      is ignored and the new view's actions are re-enabled.
+    - **Completion and review:** completion shows when no question is unanswered
+      (`next_question_id` is null). Deferred stays "Saved for later" and can be revisited
+      from the round's review list. Round-1 answers in a follow-up are a read-only
+      `<details>` section.
+    - **Assessment:** an "Assess my answers" card in the completion state states the one
+      paid request, notes deferred questions as unanswered, and explains ineligibility
+      (`assessmentEligibility` mirrors the server rule). Only a click starts it; loading,
+      refreshing, and saving never do. While pending, all actions are disabled and the
+      text box is read-only. The result (takeaway first, three collapsed sections, round-1
+      "Current assessment" vs round-2 "Conclusion of this review") renders with
+      `textContent`. Errors use `describeAssessmentError`; retry is an explicit button.
+      The request carries a navigation ticket, so a late result never lands on another
+      batch. After a reload, past results aren't shown (they're in the saved file).
+    - **Files:** plain HTML, CSS, and ES modules with no framework, build, or npm packages.
+      `state.mjs` is pure logic (next question, payloads, labels, error wording) and is
+      tested by `node --test tests/ui/state.test.mjs`. `app.mjs` wires the DOM, using
+      `textContent` only. `tests/test_ui.py` checks serving, the CSP (`'self'` only, no
+      inline code), labels, and that scripts contain no HTML sinks (`innerHTML`, `eval`, …).
+    - **Checks:** `make verify` and CI run `node --check` and the Node tests after pytest.
+      Browser behaviour was checked manually with Playwright and isn't part of CI.
+    - **Palette:** listed with contrast ratios at the top of `app.css`.
   - **`followup --reassessment …/reassessment-*.json` (round 2, manual, at most once):**
     - `load_followup_source` validates everything before any call or file is created:
       - the reassessment is a successful round-1 one with a report;
@@ -526,8 +578,9 @@ discussion, not specifications to implement as-is.
 
 Likely future additions (not yet present, do not add speculatively):
 cross-review, adaptive rounds, skills/tools/permissions, model routing, and shared
-investigation state. Do not introduce an agent framework, a database, Docker, or a frontend until the
-rest of the domain contracts and first pipeline are designed.
+investigation state. Do not introduce an agent framework, a database, Docker, or a frontend framework or build
+toolchain until the rest of the domain contracts and first pipeline are designed (the `/ui`
+screen is deliberately plain HTML, CSS, and ES modules).
 
 ## Development commands
 
@@ -542,8 +595,10 @@ uv run mypy                                      # type-check
 ```
 
 CI (`.github/workflows/ci.yml`) runs `ruff check`, `ruff format --check`, `mypy`, and
-`pytest` on every push and pull request. Run `make verify` (the same four, via
-`uv run --locked`) before pushing, and keep the Makefile aligned with CI if CI changes.
+`pytest`, then the UI checks (`node --check` and `node --test tests/ui/state.test.mjs`, Node
+22, no npm packages) on every push and pull request. Run `make verify` (the same checks;
+the Python ones via `uv run --locked`) before pushing, and keep the Makefile aligned with CI
+if CI changes.
 
 Project-level Claude Code skills live in `.claude/skills/`:
 - `review-change` reviews an implementation against its requested scope.

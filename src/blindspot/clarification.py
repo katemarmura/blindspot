@@ -1603,6 +1603,12 @@ async def _run_followup(reassessment_path: Path) -> int:
     return _report_prepared(prepared, "Follow-up question generation")
 
 
+# The bounded closing sentence, added only when no concerns or uncertainties remain.
+NO_OPEN_CONCERNS_NOTE = (
+    "Based on your answers, no additional open concerns remain among those examined."
+)
+
+
 def render_conclusion(report: ReassessmentReport | SavedReassessmentReport) -> str:
     """Render fields without another model call; keep legacy prose readable."""
     insight = report.takeaway
@@ -1619,9 +1625,7 @@ def render_conclusion(report: ReassessmentReport | SavedReassessmentReport) -> s
     elif isinstance(report, SavedReassessmentReport):
         lines.append("No takeaway was recorded; read the detailed sections.")
     if not report.remaining_considerations and not report.unresolved_uncertainties:
-        lines.append(
-            "Based on your answers, no additional open concerns remain among those examined."
-        )
+        lines.append(NO_OPEN_CONCERNS_NOTE)
     return "\n".join(lines)
 
 

@@ -34,8 +34,8 @@ Implemented so far, all manual (`blindspot.clarification`, below):
 
 One-question-at-a-time answering exists in the terminal (`answer`), over HTTP (view and
 save one response; see `batch_api.py` below), and in a minimal browser screen at `/ui` that
-uses that API. The UI also supports explicitly starting reassessment and displaying its
-result. Not yet implemented: a plan-entry screen, starting follow-ups from the UI,
+uses that API. The UI also supports explicitly starting reassessment, displaying its
+result, and reopening the latest saved one (no model call). Not yet implemented: a plan-entry screen, starting follow-ups from the UI,
 suggested answers, more than one follow-up round, automatic stopping between
 rounds, and a tailored final conclusion. Design guidance is in `docs/project-brief.md` (UI
 direction). Preserve the existing CLI as a baseline; do not speculatively add a database,
@@ -45,7 +45,8 @@ assumptions, and retain links to original findings.
 ## Current scope: minimal server, a single-expert experiment, a multi-expert runner (manual or auto-selected team), a model-comparison CLI, and a manual clarification round with one follow-up
 
 **As of now, this repository contains a project scaffold, a small FastAPI server (health,
-viewing, answering, and explicitly assessing a saved clarification batch, and a minimal
+viewing, answering, explicitly assessing, and reopening the latest saved assessment of a
+saved clarification batch, and a minimal
 screen at `/ui`; only the assessment endpoint calls a model), and one
 small domain contract with one real LLM call (plus at most one bounded recovery call)
 built on it. It runs alone, concurrently for 1–3 caller-supplied perspectives, for a
@@ -423,6 +424,23 @@ What exists:
       nothing remains, `assessed_responses`, `answers_changed_during_assessment` for
       out-of-band edits, `used_research`). The guard is per process and doesn't cover a
       concurrent CLI `reassess`.
+    - **`GET /clarifications/{batch_id}/assessments/latest`** (read only, never calls a
+      model) returns `LatestAssessment`: the latest successful `SavedAssessmentView` (or
+      null) and `unusable_files`.
+      - **Selection:** `_latest_saved_assessment` picks by parsed `created_at`, ties by
+        `reassessment_id`; failed attempts are skipped, not counted.
+      - **Checks:** `_read_saved_assessment` reuses `_SavedReassessment` and
+        `_reassessment_reference_issues` (research IDs checked only against the file's own
+        `research.source_ids` link; unlike a follow-up, the research file isn't reloaded).
+        It requires a regular file in the runs directory named after its ID, the
+        batch's `clarification_id` and round, a time-zone-aware time, a report, a
+        `conclusion_status` (if present) matching the round, and valid, unique answers to
+        this batch's questions. In round 2, the round-1 answers must equal the artifact's
+        `prior_responses`.
+      - **Output:** `report` is a `SavedReassessmentReport` (legacy prose or missing
+        takeaway allowed). `based_on_earlier_answers` compares recorded
+        (question, status, answer) with the current `responses.json` plus carried round-1
+        answers. Nothing is rewritten.
     - **Covered by** `tests/test_batch_api.py` (TestClient over copies of the kitten
       fixture in `tmp_path`).
   - **Answering screen (`src/blindspot/web/`, served at `/ui`; `/` redirects there):**
@@ -450,7 +468,15 @@ What exists:
       "Current assessment" vs round-2 "Conclusion of this review") renders with
       `textContent`. Errors use `describeAssessmentError`; retry is an explicit button.
       The request carries a navigation ticket, so a late result never lands on another
-      batch. After a reload, past results aren't shown (they're in the saved file).
+      batch.
+    - **Reopening:** after a batch loads, `app.mjs` reads `GET …/assessments/latest`
+      (see the `batch_api.py` bullet above) with the same navigation ticket and applies it through
+      `savedAssessmentUpdate`. That function ignores a stale navigation, a pending or
+      already shown on-page result, and marks a save made during the read as outdated.
+      It re-renders only the assessment cards (typed text is kept), with no focus change
+      or announcement. `isOutdated`/`outdatedNote` label "Based on earlier answers".
+      `takeawayKind` handles legacy prose and missing takeaways. A failed read or only
+      unusable files shows a neutral `SAVED_ASSESSMENT_UNAVAILABLE` note (not an alert).
     - **Files:** plain HTML, CSS, and ES modules with no framework, build, or npm packages.
       `state.mjs` is pure logic (next question, payloads, labels, error wording) and is
       tested by `node --test tests/ui/state.test.mjs`. `app.mjs` wires the DOM, using

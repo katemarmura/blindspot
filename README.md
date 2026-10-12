@@ -467,10 +467,17 @@ http://127.0.0.1:8000/ui?batch=clarify-kitten-example.
   are collapsible sections. It's saved as `reassessment-<id>.json` in the batch folder, like
   the CLI's. A failure explains what went wrong without showing model output, keeps your
   answers, and offers an explicit "Try again" (another paid request).
-- **Refreshing never repeats a paid request**, but the screen doesn't reload past results:
-  after a reload, a finished assessment is only in its saved file, and one still running
-  is shown as "already running" until it ends. Leaving the page doesn't cancel a running
-  assessment; its result is still saved.
+- **Reopening:** opening or refreshing a batch shows its latest successful saved
+  assessment, read from its file with no model request. It appears after the questions,
+  without moving focus, and answering never waits for it. A newer failed attempt doesn't
+  hide it. The kicker shows the round, the saved date, and the file name. If the batch's
+  saved answers now differ from the ones it used, it's labelled "Based on earlier answers"
+  and "Assess again" becomes the primary button. Older reports with a prose takeaway are
+  labelled "Earlier summary format". If a saved assessment can't be shown, a short note
+  says so and answering carries on.
+- **Refreshing never repeats a paid request.** One still running is shown as "already
+  running" until it ends; reload afterwards to see its result. Leaving the page doesn't
+  cancel a running assessment; its result is still saved.
 - The screen doesn't create plans or run research or follow-ups; use the CLI. A follow-up
   batch's carried round-1 research is included automatically; other research files can
   only be added with `reassess --research`.
@@ -520,6 +527,7 @@ check `editable` in the `GET` response.
 | --- | --- |
 | `GET /clarifications/{batch_id}` | Batch ID, `clarification_id`, `round`, `plan`, `responses_saved`, `next_question_id` (first question of this round with no response), and `questions`: `id`, `round`, `question`, `why_it_matters`, `perspectives`, `source_finding_ids`, `status`, `answer`, `editable`; plus `assessment_running`. Never creates files. |
 | `PUT /clarifications/{batch_id}/responses/{question_id}` | Body `{"status": …, "answer": …}`. Saves that one response in the batch's `responses.json` (created from the template if missing) and returns the updated batch. Other entries, the instructions, and the reference `question` fields are kept. Refused (409) while an assessment of the batch is running. |
+| `GET /clarifications/{batch_id}/assessments/latest` | **Read only; never calls a model.** Returns `{"assessment": …, "unusable_files": n}`. `assessment` is the latest successful saved assessment of this batch (`null` if none): the `POST` response's fields except `answers_changed_during_assessment`, plus `created_at` and `based_on_earlier_answers`. `report` may hold an older prose takeaway or none. |
 | `POST /clarifications/{batch_id}/reassessments` | **One paid model request.** Body must be exactly `{"confirm_paid_request": true}`. Runs `reassess` on the batch's `clarification.json` and `responses.json` (a follow-up's carried research included), saves `reassessment-<id>.json`, and returns `reassessment_id`, `round`, `conclusion_status`, `report`, `closing_note`, `assessed_responses` (the answers used, both rounds in a follow-up), `answers_changed_during_assessment`, and `used_research`. One at a time per batch. |
 
 - **Statuses** are the response-file ones: `answered` (text required), `dont_know` (no text),
@@ -542,9 +550,26 @@ check `editable` in the `GET` response.
   `recorded_responses` match what was assessed. Edits made outside the API during the call
   (by hand or with the CLI) can't be blocked; the response then has
   `answers_changed_during_assessment: true`.
+- **Reopening a saved assessment** reads only the batch folder's `reassessment-*.json`
+  files.
+  - **Selection:** the latest by saved `created_at`; ties go to the larger
+    `reassessment_id`. Failed attempts are skipped, so a newer failure never hides an
+    older success.
+  - **Checks:** a file is used only if it's a regular file inside `runs/` named after its
+    `reassessment_id`, has the batch's `clarification_id` and round, has a time-zone-aware
+    `created_at` and a report, and holds recorded answers to this batch's questions. In a
+    follow-up, its round-1 answers must be the ones the batch carries. The report's
+    finding and question citations must resolve as they must for a follow-up. Research
+    citations are checked only against the file's own `research.source_ids` link; the
+    research file isn't reloaded.
+  - **Unusable files** are skipped and only counted (`unusable_files`); their content is
+    never returned.
+  - **`based_on_earlier_answers`** compares the answers the assessment recorded with the
+    batch's current saved answers (question, status, and answer; file times aren't used).
+  - Saved files are never rewritten. Batch errors are the same as for `GET` (404/403/409).
 - **Limits:** the "running" guard lives in the server process (one uvicorn worker), not in
-  the files, so a CLI `reassess` of the same batch isn't blocked. A finished result isn't
-  served again; read the saved `reassessment-*.json`.
+  the files, so a CLI `reassess` of the same batch isn't blocked. Only the latest successful
+  assessment is served; older ones stay in their files.
 - The interactive API docs are at http://127.0.0.1:8000/docs.
 
 ## Development commands

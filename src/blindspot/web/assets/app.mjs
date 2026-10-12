@@ -1,6 +1,8 @@
 // The answering screen: open a saved batch, show one question at a time, save each
 // response, and (only when asked) assess the saved answers, through the HTTP API:
-// GET /clarifications/{id}, PUT …/responses/{qid}, POST …/reassessments.
+// GET /clarifications/{id}, PUT …/responses/{qid}, POST …/reassessments. Opening a batch
+// also reads its latest saved assessment (GET …/assessments/latest), which never calls a
+// model.
 // All saved, model, and server text is inserted with textContent, never parsed as HTML.
 
 import {
@@ -13,11 +15,17 @@ import {
   describeSaveError,
   editableQuestions,
   initialText,
+  isOutdated,
   isPlausibleBatchId,
+  NO_TAKEAWAY_TEXT,
   nextQuestionId,
+  outdatedNote,
   priorQuestions,
   progress,
+  resultKicker,
+  savedAssessmentUpdate,
   statusLabel,
+  takeawayKind,
   takeawayStatusLabel,
 } from "./state.mjs";
 
@@ -32,9 +40,11 @@ const state = {
   saving: false,
   savingButton: null,
   assessing: false, // an assessment request from this page is pending
-  assessment: null, // the latest result shown on this page (AssessmentView)
+  assessment: null, // the result shown: produced on this page, or the latest saved one
   assessmentStale: false, // answers were changed on this page after that result
   assessmentError: null,
+  savedNote: null, // why a saved assessment couldn't be shown, if one couldn't
+  savesCompleted: 0, // answers saved on this page, to spot a save during a read
 };
 
 // Each load and save checks it still belongs to the current navigation before touching
@@ -50,6 +60,7 @@ function navigate() {
   state.assessment = null;
   state.assessmentStale = false;
   state.assessmentError = null;
+  state.savedNote = null;
   return navigation.begin();
 }
 
@@ -149,7 +160,34 @@ async function load(batchId) {
     $("retry-load").hidden = !retry;
     show("error-view");
     $("error-title").focus();
+    return;
   }
+  loadSavedAssessment(batchId, ticket);
+}
+
+// The latest saved assessment, read after the questions are shown so answering never waits
+// for it. A read only: it never starts an assessment. It arrives quietly (no focus change
+// or announcement), and only into the navigation it was requested for.
+async function loadSavedAssessment(batchId, ticket) {
+  const savesBefore = state.savesCompleted;
+  let latest = null;
+  try {
+    latest = await request(`${batchPath(batchId)}/assessments/latest`, { signal: ticket.signal });
+  } catch (error) {
+    if (!navigation.isCurrent(ticket)) return;
+    if (!(error instanceof RequestFailure)) throw error;
+  }
+  const update = savedAssessmentUpdate(latest, {
+    current: navigation.isCurrent(ticket),
+    assessing: state.assessing,
+    shown: state.assessment,
+    savedDuringRead: state.savesCompleted !== savesBefore,
+  });
+  if (update === null) return;
+  state.assessment = update.assessment;
+  state.assessmentStale = update.stale;
+  state.savedNote = update.note;
+  renderAssessmentParts();
 }
 
 // --- Rendering ---
@@ -169,6 +207,7 @@ function render() {
 
   renderAssess(batch, question);
   renderResult();
+  renderSavedNote();
 
   renderList($("review-list"), editableQuestions(batch), { editable: true });
   const prior = priorQuestions(batch);
@@ -277,6 +316,22 @@ function renderList(list, questions, { editable }) {
 
 // --- Assessment ---
 
+// Re-render only the assessment cards, leaving the question card (and any typed text) alone.
+function renderAssessmentParts() {
+  if (state.batch === null) return;
+  const question =
+    editableQuestions(state.batch).find((q) => q.id === state.currentId) ?? null;
+  renderAssess(state.batch, question);
+  renderResult();
+  renderSavedNote();
+  applyBusy();
+}
+
+function renderSavedNote() {
+  $("saved-assessment-note").hidden = !state.savedNote;
+  $("saved-assessment-note").textContent = state.savedNote ?? "";
+}
+
 function renderAssess(batch, question) {
   const card = $("assess-card");
   const { total } = progress(batch);
@@ -295,7 +350,8 @@ function renderAssess(batch, question) {
   $("assess-ineligible").hidden = eligible;
   $("assess-ineligible").textContent = reason ?? "";
 
-  // Started elsewhere (another tab, or before a reload): this page can't show its result.
+  // Started elsewhere (another tab, or before a reload): this page can't show its result
+  // live; it appears after a reload once the assessment finishes.
   const elsewhere = batch.assessment_running && !state.assessing;
   $("assess-elsewhere").hidden = !elsewhere;
   $("assess-action").hidden = !eligible || elsewhere;
@@ -308,7 +364,9 @@ function renderAssess(batch, question) {
         ? "Assess again"
         : "Assess my answers";
   // After a current result, assessing again is a secondary choice (another paid request).
-  const secondary = state.assessment !== null && !state.assessmentStale && !state.assessing;
+  const secondary =
+    state.assessment !== null && !isOutdated(state.assessment, state.assessmentStale) &&
+    !state.assessing;
   $("assess-button").classList.toggle("primary", !secondary);
   $("assess-button").classList.toggle("secondary", secondary);
   $("assess-waiting").hidden = !state.assessing;
@@ -322,9 +380,7 @@ function renderResult() {
   if (result === null) return;
   const report = result.report;
 
-  $("result-kicker").textContent =
-    `${result.round === 2 ? "Follow-up round" : "Round 1"} · ` +
-    `saved as reassessment-${result.reassessment_id}.json`;
+  $("result-kicker").textContent = resultKicker(result);
   $("result-title").textContent = conclusionHeading(result.conclusion_status);
 
   const notes = [];
@@ -334,19 +390,19 @@ function renderResult() {
         "result reflects the answers it used, not the newer ones.",
     );
   }
-  if (state.assessmentStale) {
-    notes.push(
-      "You've changed answers since this assessment. It reflects the answers it used; " +
-        "assess again to include your changes.",
-    );
-  }
+  const outdated = outdatedNote(result, state.assessmentStale);
+  if (outdated) notes.push(outdated);
   $("result-changed").hidden = notes.length === 0;
   $("result-changed").textContent = notes.join(" ");
 
   const takeaway = report.takeaway;
-  $("takeaway").hidden = takeaway === null;
-  $("takeaway-none").hidden = takeaway !== null;
-  if (takeaway !== null) {
+  const kind = takeawayKind(report);
+  $("takeaway").hidden = kind !== "structured";
+  $("takeaway-legacy").hidden = kind !== "legacy";
+  $("takeaway-legacy-text").textContent = kind === "legacy" ? takeaway : "";
+  $("takeaway-none").hidden = !(kind in NO_TAKEAWAY_TEXT);
+  $("takeaway-none").textContent = NO_TAKEAWAY_TEXT[kind] ?? "";
+  if (kind === "structured") {
     $("takeaway-blind-spot").textContent = takeaway.blind_spot;
     $("takeaway-why").textContent = takeaway.why_it_mattered;
     const badge = $("takeaway-status");
@@ -416,6 +472,7 @@ async function assess() {
     state.assessing = false;
     state.assessment = result;
     state.assessmentStale = false;
+    state.savedNote = null;
     render();
     announce(`${conclusionHeading(result.conclusion_status)} is ready.`);
     $("result-title").focus();
@@ -505,6 +562,7 @@ async function save(action, button) {
     if (!navigation.isCurrent(ticket)) return; // the user has moved on; show nothing
     setSaving(false);
     state.batch = batch;
+    state.savesCompleted += 1;
     if (state.assessment) state.assessmentStale = true;
     state.currentId = nextQuestionId(batch, questionId);
     render();

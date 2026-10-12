@@ -14,11 +14,20 @@ import {
   describeSaveError,
   editableQuestions,
   initialText,
+  formatSavedDate,
+  isOutdated,
   isPlausibleBatchId,
+  NO_TAKEAWAY_TEXT,
   nextQuestionId,
+  outdatedNote,
   priorQuestions,
   progress,
+  resultKicker,
+  SAVED_ASSESSMENT_UNAVAILABLE,
+  savedAssessmentNote,
+  savedAssessmentUpdate,
   statusLabel,
+  takeawayKind,
   takeawayStatusLabel,
 } from "../../src/blindspot/web/assets/state.mjs";
 
@@ -180,4 +189,115 @@ test("assessment errors: server messages pass through, others never leak raw out
   const raw = describeAssessmentError({ status: 500, detail: "Traceback: secret" });
   assert.doesNotMatch(raw, /Traceback/);
   assert.match(raw, /another paid request/);
+});
+
+// --- Reopening a saved assessment (fictional data) ---
+
+const report = (overrides = {}) => ({
+  remaining_considerations: [],
+  addressed_concerns: [],
+  unresolved_uncertainties: [],
+  takeaway: null,
+  ...overrides,
+});
+
+const saved = (overrides = {}) => ({
+  batch_id: "clarify-x",
+  reassessment_id: "20260101T000000Z-aaa111",
+  created_at: "2026-01-01T12:00:00+00:00",
+  round: 1,
+  conclusion_status: "current_assessment",
+  report: report(),
+  closing_note: null,
+  assessed_responses: [],
+  based_on_earlier_answers: false,
+  used_research: false,
+  ...overrides,
+});
+
+test("the unavailable note appears only for a failed read or unusable files", () => {
+  assert.equal(savedAssessmentNote(null), SAVED_ASSESSMENT_UNAVAILABLE);
+  assert.equal(savedAssessmentNote({ assessment: null, unusable_files: 2 }), SAVED_ASSESSMENT_UNAVAILABLE);
+  assert.equal(savedAssessmentNote({ assessment: null, unusable_files: 0 }), null);
+  assert.equal(savedAssessmentNote({ assessment: saved(), unusable_files: 1 }), null);
+  assert.doesNotMatch(SAVED_ASSESSMENT_UNAVAILABLE, /\d|reassessment-|\//);
+});
+
+test("the kicker shows the round, a readable saved date, and the file", () => {
+  assert.equal(
+    resultKicker(saved(), "en-GB", "UTC"),
+    "Round 1 · saved 1 Jan 2026 · reassessment-20260101T000000Z-aaa111.json",
+  );
+  assert.equal(
+    resultKicker(saved({ round: 2, created_at: undefined }), "en-GB", "UTC"),
+    "Follow-up round · reassessment-20260101T000000Z-aaa111.json",
+  );
+  assert.equal(formatSavedDate("not a date"), null);
+  assert.equal(formatSavedDate(null), null);
+});
+
+test("a saved result is outdated when answers changed since, or on this page", () => {
+  assert.equal(isOutdated(saved(), false), false);
+  assert.equal(outdatedNote(saved(), false), null);
+  assert.equal(isOutdated(saved({ based_on_earlier_answers: true }), false), true);
+  assert.match(outdatedNote(saved({ based_on_earlier_answers: true }), false), /^Based on earlier answers/);
+  assert.match(outdatedNote(saved(), true), /^Based on earlier answers/);
+  // A result produced on this page keeps its own wording.
+  const fresh = { reassessment_id: "20260101T000000Z-aaa111", round: 1, report: report() };
+  assert.equal(isOutdated(fresh, false), false);
+  assert.match(outdatedNote(fresh, true), /^You've changed answers since this assessment/);
+  assert.equal(isOutdated(null, true), false);
+});
+
+test("takeaways: structured, legacy prose, missing, or empty", () => {
+  const item = { summary: "x", source_finding_ids: ["e1-f1"], question_ids: [] };
+  assert.equal(takeawayKind(report({ takeaway: { blind_spot: "b" } })), "structured");
+  assert.equal(takeawayKind(report({ takeaway: "Older prose." })), "legacy");
+  assert.equal(takeawayKind(report({ unresolved_uncertainties: [item] })), "missing");
+  assert.equal(takeawayKind(report()), "empty");
+  assert.match(NO_TAKEAWAY_TEXT.missing, /No takeaway was recorded/);
+});
+
+test("a saved assessment from an earlier navigation is never applied", () => {
+  const navigation = createNavigation();
+  const forA = navigation.begin();
+  navigation.begin(); // the user opened batch B
+  const update = savedAssessmentUpdate(
+    { assessment: saved({ batch_id: "clarify-a" }), unusable_files: 0 },
+    { current: navigation.isCurrent(forA), assessing: false, shown: null, savedDuringRead: false },
+  );
+  assert.equal(update, null);
+  assert.equal(forA.signal.aborted, true); // and its request was aborted
+});
+
+test("a saved assessment never replaces one started or shown on this page", () => {
+  const latest = { assessment: saved(), unusable_files: 0 };
+  const base = { current: true, assessing: false, shown: null, savedDuringRead: false };
+  assert.equal(savedAssessmentUpdate(latest, { ...base, assessing: true }), null);
+  assert.equal(savedAssessmentUpdate(latest, { ...base, shown: saved() }), null);
+});
+
+test("applying a saved assessment: shown, missing, unusable, failed, or saved-during-read", () => {
+  const base = { current: true, assessing: false, shown: null, savedDuringRead: false };
+  const found = saved();
+  assert.deepEqual(savedAssessmentUpdate({ assessment: found, unusable_files: 1 }, base), {
+    assessment: found,
+    stale: false,
+    note: null,
+  });
+  assert.deepEqual(savedAssessmentUpdate({ assessment: null, unusable_files: 0 }, base), {
+    assessment: null,
+    stale: false,
+    note: null,
+  });
+  assert.equal(
+    savedAssessmentUpdate({ assessment: null, unusable_files: 1 }, base).note,
+    SAVED_ASSESSMENT_UNAVAILABLE,
+  );
+  assert.equal(savedAssessmentUpdate(null, base).note, SAVED_ASSESSMENT_UNAVAILABLE);
+  assert.equal(
+    savedAssessmentUpdate({ assessment: found, unusable_files: 0 }, { ...base, savedDuringRead: true })
+      .stale,
+    true,
+  );
 });

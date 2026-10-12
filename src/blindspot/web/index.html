@@ -121,7 +121,10 @@
           <p id="done-deferred" hidden></p>
         </section>
 
-        <!-- The assessment result -->
+        <!-- A saved assessment exists but couldn't be shown (not an alert: answering works) -->
+        <p id="saved-assessment-note" class="inline-note" hidden></p>
+
+        <!-- The assessment result: produced on this page, or the latest saved one -->
         <section id="result-card" class="card result" aria-labelledby="result-title" hidden>
           <p id="result-kicker" class="result-kicker"></p>
           <h2 id="result-title" class="section-title" tabindex="-1"></h2>
@@ -144,9 +147,11 @@
               </dd>
             </div>
           </dl>
-          <p id="takeaway-none" hidden>
-            This assessment has no takeaway because it lists no concerns or uncertainties.
-          </p>
+          <div id="takeaway-legacy" class="takeaway-legacy" hidden>
+            <p class="legacy-label">Earlier summary format</p>
+            <p id="takeaway-legacy-text" class="prose"></p>
+          </div>
+          <p id="takeaway-none" hidden></p>
           <p id="closing-note" class="closing-note" hidden></p>
 
           <details class="result-section">
@@ -175,9 +180,9 @@
           <p id="assess-deferred" class="inline-note" hidden></p>
           <p id="assess-ineligible" hidden></p>
           <p id="assess-elsewhere" class="inline-note" hidden>
-            An assessment of this batch is already running, perhaps in another tab. Its result
-            will be saved in the batch folder, but this screen can't show it. Answers can't
-            be changed until it finishes; reload the page later.
+            An assessment of this batch is already running, perhaps in another tab. Answers
+            can't be changed until it finishes. Reload the page once it's finished to see its
+            result; reloading never starts a request.
           </p>
           <div id="assess-action">
             <p id="assess-cost" class="cost-note">
@@ -191,7 +196,7 @@
           <p id="assess-waiting" class="waiting" role="status" hidden>
             Assessing your answers. This can take up to a minute. Your answers can't be
             changed until it finishes. If you leave or reload, the result is still saved in the
-            batch folder, but this screen won't show it.
+            batch folder; reload the page once it's finished to see it.
           </p>
           <p id="assess-error" class="save-error" role="alert" hidden></p>
         </section>

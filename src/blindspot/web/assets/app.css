@@ -481,6 +481,24 @@ summary {
   margin: 0 0 0.25rem;
   color: var(--muted);
   font-size: 0.875rem;
+  overflow-wrap: anywhere;
+}
+
+#saved-assessment-note {
+  margin: 1.5rem 0 0;
+}
+
+.takeaway-legacy {
+  margin: 1rem 0;
+}
+
+.legacy-label {
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.875rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
 }
 
 .takeaway {

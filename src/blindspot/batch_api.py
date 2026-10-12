@@ -14,12 +14,15 @@ Only one endpoint calls a model: `POST …/reassessments`, which runs the existi
 `clarification.reassess` (one paid request, no retries) after an explicit confirmation.
 While it runs, the batch's answers can't be changed through this API and no second
 assessment of the batch can start, so the result always matches the answers it used.
+`GET …/assessments/latest` only reads: it returns the batch's latest successful saved
+assessment (never starting one), and says whether the answers have changed since.
 """
 
 import asyncio
 import re
 import threading
 from dataclasses import dataclass, field
+from datetime import datetime
 from pathlib import Path
 from typing import Annotated, Any, Literal
 
@@ -36,6 +39,10 @@ from blindspot.clarification import (
     ClarificationInputError,
     Reassessment,
     RecordedResponses,
+    _read_json,
+    _reassessment_reference_issues,
+    _SavedReassessment,
+    _validate,
     load_artifact,
     load_responses,
     question_perspectives,
@@ -47,12 +54,15 @@ from blindspot.schemas import (
     ReassessmentReport,
     ResponseEntry,
     ResponseStatus,
+    SavedReassessmentReport,
 )
 
 # Folder names made by `create_run_dir("clarify-")` (and the eval copies); no separators,
 # dots, or glob characters, so a valid ID can't point anywhere else.
 _BATCH_ID = re.compile(r"clarify-[A-Za-z0-9][A-Za-z0-9_-]{0,127}")
 _LAYOUTS = ("*/{batch_id}", "evals/*/{batch_id}")
+# Saved assessment files, as `reassess` names them (`reassessment-<reassessment_id>.json`).
+_REASSESSMENT_FILE = re.compile(r"reassessment-([A-Za-z0-9][A-Za-z0-9_-]{0,127})\.json")
 
 
 # --- HTTP contract ---
@@ -125,6 +135,34 @@ class AssessmentView(BaseModel):
     answers_changed_during_assessment: bool
     # A follow-up batch's carried round-1 research was included.
     used_research: bool
+
+
+class SavedAssessmentView(BaseModel):
+    """A successful assessment read back from its saved file (no model call)."""
+
+    batch_id: str
+    reassessment_id: str
+    # The file's `created_at` (UTC, ISO 8601), which decides which assessment is latest.
+    created_at: str
+    round: Literal[1, 2]
+    conclusion_status: Literal["current_assessment", "review_conclusion"]
+    # Saved reports may have a legacy prose takeaway, or none (older files).
+    report: SavedReassessmentReport
+    closing_note: str | None
+    assessed_responses: list[AssessedResponse]
+    # The batch's saved answers now differ from `assessed_responses` (compared by question,
+    # status, and answer; file times are never used).
+    based_on_earlier_answers: bool
+    used_research: bool
+
+
+class LatestAssessment(BaseModel):
+    # None when the batch has no usable successful assessment (failed attempts don't count).
+    assessment: SavedAssessmentView | None
+    # Saved assessment files that were skipped because they can't be used: unreadable,
+    # invalid, an unsupported format, another batch's, or a link. Failed attempts aren't
+    # counted.
+    unusable_files: int
 
 
 # --- Locating and reading a batch ---
@@ -330,31 +368,47 @@ def _failure_message(error: ClarificationError, path: Path | None) -> str:
     )
 
 
+def _conclusion_status(
+    artifact: ClarificationArtifact,
+) -> Literal["current_assessment", "review_conclusion"]:
+    return "current_assessment" if artifact.round == 1 else "review_conclusion"
+
+
+def _closing_note(report: ReassessmentReport | SavedReassessmentReport) -> str | None:
+    open_items = report.remaining_considerations or report.unresolved_uncertainties
+    return None if open_items else NO_OPEN_CONCERNS_NOTE
+
+
+def _assessed_responses(
+    artifact: ClarificationArtifact, used: list[ResponseEntry]
+) -> list[AssessedResponse]:
+    earlier = {q.id for q in artifact.prior_questions}
+    return [
+        AssessedResponse(
+            question_id=r.question_id,
+            round=1 if r.question_id in earlier else artifact.round,
+            status=r.status,
+            answer=r.answer,
+        )
+        for r in used
+        if r.status is not None
+    ]
+
+
 def _assessment_view(
     batch_id: str, artifact: ClarificationArtifact, result: Reassessment, changed: bool
 ) -> AssessmentView:
     assert result.path is not None and result.report is not None
-    report = result.report
-    earlier = {q.id for q in artifact.prior_questions}
-    used = [*artifact.prior_responses, *result.responses.recorded]
-    open_items = report.remaining_considerations or report.unresolved_uncertainties
     return AssessmentView(
         batch_id=batch_id,
         reassessment_id=result.path.stem.removeprefix("reassessment-"),
         round=artifact.round,
-        conclusion_status="current_assessment" if artifact.round == 1 else "review_conclusion",
-        report=report,
-        closing_note=None if open_items else NO_OPEN_CONCERNS_NOTE,
-        assessed_responses=[
-            AssessedResponse(
-                question_id=r.question_id,
-                round=1 if r.question_id in earlier else artifact.round,
-                status=r.status,
-                answer=r.answer,
-            )
-            for r in used
-            if r.status is not None
-        ],
+        conclusion_status=_conclusion_status(artifact),
+        report=result.report,
+        closing_note=_closing_note(result.report),
+        assessed_responses=_assessed_responses(
+            artifact, [*artifact.prior_responses, *result.responses.recorded]
+        ),
         answers_changed_during_assessment=changed,
         used_research=artifact.prior_research is not None,
     )
@@ -423,3 +477,146 @@ async def post_reassessment(
     except ClarificationInputError:
         changed = True
     return _assessment_view(batch_id, artifact, result, changed)
+
+
+# --- Reopening the latest saved assessment (no model call) ---
+
+
+class _SavedAssessmentFile(_SavedReassessment):
+    """A saved `reassessment-*.json`, with the fields needed to choose and show it."""
+
+    created_at: str
+    # Absent in files saved before it was added.
+    conclusion_status: str | None = None
+
+
+@dataclass(frozen=True)
+class _SavedAssessment:
+    saved: _SavedAssessmentFile
+    created_at: datetime
+    report: SavedReassessmentReport
+    used: list[ResponseEntry]
+
+
+def _read_saved_assessment(
+    path: Path, artifact: ClarificationArtifact, root: Path
+) -> _SavedAssessment | None:
+    """A successful assessment of this batch, or None for a failed attempt.
+
+    Raises `ClarificationInputError` for a file that can't be used. Checks that it belongs
+    to this batch and round, that its recorded answers are valid responses to this batch's
+    questions (in a follow-up, with round 1's answers as the batch carries them), and that
+    the report's finding and question citations resolve as they must for a follow-up.
+    Research citations are checked only against the file's own `research.source_ids`
+    link; the research file isn't reloaded.
+    """
+    match = _REASSESSMENT_FILE.fullmatch(path.name)
+    if match is None or path.is_symlink() or not path.resolve().is_relative_to(root):
+        raise ClarificationInputError("not a saved assessment file inside the runs directory")
+    saved: _SavedAssessmentFile = _validate(
+        _SavedAssessmentFile, _read_json(path, "Reassessment"), "Reassessment"
+    )
+    if saved.reassessment_id != match.group(1):
+        raise ClarificationInputError("reassessment ID doesn't match the file name")
+    if saved.clarification_id != artifact.clarification_id:
+        raise ClarificationInputError("belongs to another batch")
+    if saved.clarification_round != artifact.round:
+        raise ClarificationInputError("belongs to another round")
+    if saved.status == "failed":
+        return None
+    if saved.report is None:
+        raise ClarificationInputError("successful assessment without a report")
+    try:
+        created_at = datetime.fromisoformat(saved.created_at)
+    except ValueError:
+        raise ClarificationInputError("creation time isn't an ISO 8601 timestamp") from None
+    if created_at.tzinfo is None:
+        raise ClarificationInputError("creation time has no time zone")
+    if saved.conclusion_status not in (None, _conclusion_status(artifact)):
+        raise ClarificationInputError("conclusion status doesn't match the batch's round")
+    try:
+        used = [
+            ResponseEntry(question_id=r.question_id, status=r.status, answer=r.answer)
+            for r in saved.recorded_responses
+        ]
+    except pydantic.ValidationError:
+        raise ClarificationInputError("recorded responses are invalid") from None
+    ids = [r.question_id for r in used]
+    all_ids = {q.id for q in artifact.all_questions}
+    if len(set(ids)) != len(ids) or not set(ids) <= all_ids:
+        raise ClarificationInputError("recorded responses don't match the batch's questions")
+    earlier = {q.id for q in artifact.prior_questions}
+    if _entries([r for r in used if r.question_id in earlier]) != _entries(
+        artifact.prior_responses
+    ):
+        raise ClarificationInputError("round-1 answers differ from those the batch carries")
+    research = set(saved.research.source_ids) if saved.research is not None else None
+    responses = RecordedResponses(used, list(saved.unanswered_question_ids))
+    if _reassessment_reference_issues(saved.report, artifact, responses, research):
+        raise ClarificationInputError(
+            "report cites findings, questions, or sources that don't resolve"
+        )
+    return _SavedAssessment(saved, created_at, saved.report, used)
+
+
+def _entries(entries: list[ResponseEntry]) -> list[tuple[str, Any, Any]]:
+    return sorted((r.question_id, r.status, r.answer) for r in entries)
+
+
+def _latest_saved_assessment(
+    directory: Path, artifact: ClarificationArtifact, root: Path
+) -> tuple[_SavedAssessment | None, int]:
+    """The latest successful assessment by saved `created_at` (ties: reassessment ID), and
+    how many files were skipped as unusable. Failed attempts are skipped silently, so a
+    newer failure never hides an older success."""
+    found: list[_SavedAssessment] = []
+    unusable = 0
+    for path in sorted(directory.glob("reassessment-*.json")):
+        try:
+            assessment = _read_saved_assessment(path, artifact, root)
+        except ClarificationInputError:
+            unusable += 1
+            continue
+        if assessment is not None:
+            found.append(assessment)
+    latest = max(
+        found,
+        key=lambda a: (a.created_at, a.saved.reassessment_id),
+        default=None,
+    )
+    return latest, unusable
+
+
+@router.get("/{batch_id}/assessments/latest")
+def get_latest_assessment(batch_id: str, store: Store) -> LatestAssessment:
+    """The batch's latest successful saved assessment, read from its file. Never calls a
+    model or starts an assessment; failed attempts and unusable files are skipped."""
+    directory = store.locate(batch_id)
+    artifact = _load_artifact(directory)
+    latest, unusable = _latest_saved_assessment(directory, artifact, store.runs_dir.resolve())
+    if latest is None:
+        return LatestAssessment(assessment=None, unusable_files=unusable)
+    responses_path = directory / TEMPLATE_FILENAME
+    try:
+        current = (
+            load_responses(responses_path, artifact).recorded if responses_path.exists() else []
+        )
+    except ClarificationInputError as exc:
+        raise _invalid_responses(exc) from None
+    saved = latest.saved
+    return LatestAssessment(
+        assessment=SavedAssessmentView(
+            batch_id=batch_id,
+            reassessment_id=saved.reassessment_id,
+            created_at=latest.created_at.isoformat(),
+            round=artifact.round,
+            conclusion_status=_conclusion_status(artifact),
+            report=latest.report,
+            closing_note=_closing_note(latest.report),
+            assessed_responses=_assessed_responses(artifact, latest.used),
+            based_on_earlier_answers=_entries(latest.used)
+            != _entries([*artifact.prior_responses, *current]),
+            used_research=saved.research is not None,
+        ),
+        unusable_files=unusable,
+    )

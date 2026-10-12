@@ -215,3 +215,89 @@ export function createNavigation() {
 export function isPlausibleBatchId(value) {
   return /^clarify-[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/.test(value);
 }
+
+// --- Reopening a saved assessment ---
+//
+// GET …/assessments/latest returns {assessment, unusable_files}. A reopened assessment
+// (SavedAssessmentView) has `created_at` and `based_on_earlier_answers`; one produced on
+// this page (AssessmentView) has neither.
+
+export const SAVED_ASSESSMENT_UNAVAILABLE =
+  "A saved assessment couldn't be shown. You can keep answering; nothing was lost.";
+
+// What to show when there is no assessment to display: the neutral note when loading
+// failed or every saved file was unusable, otherwise nothing. Never a count or a path.
+export function savedAssessmentNote(latest) {
+  if (latest === null) return SAVED_ASSESSMENT_UNAVAILABLE; // the request failed
+  if (latest.assessment === null && latest.unusable_files > 0) return SAVED_ASSESSMENT_UNAVAILABLE;
+  return null;
+}
+
+// The saved date in the viewer's locale, or null when it is missing or unreadable.
+export function formatSavedDate(createdAt, locale = undefined, timeZone = undefined) {
+  if (typeof createdAt !== "string") return null;
+  const date = new Date(createdAt);
+  if (Number.isNaN(date.getTime())) return null;
+  return new Intl.DateTimeFormat(locale, { dateStyle: "medium", timeZone }).format(date);
+}
+
+export function resultKicker(result, locale = undefined, timeZone = undefined) {
+  const parts = [result.round === 2 ? "Follow-up round" : "Round 1"];
+  const saved = formatSavedDate(result.created_at, locale, timeZone);
+  if (saved) parts.push(`saved ${saved}`);
+  parts.push(`reassessment-${result.reassessment_id}.json`);
+  return parts.join(" · ");
+}
+
+// The result no longer reflects the saved answers: it was saved before they changed, or
+// answers were changed on this page after it was shown.
+export function isOutdated(result, changedOnPage) {
+  return result !== null && (changedOnPage || result.based_on_earlier_answers === true);
+}
+
+export function outdatedNote(result, changedOnPage) {
+  if (!isOutdated(result, changedOnPage)) return null;
+  if (result.created_at !== undefined) {
+    return (
+      "Based on earlier answers. Some saved answers have changed since this assessment " +
+      "was saved, so it may not reflect them."
+    );
+  }
+  return (
+    "You've changed answers since this assessment. It reflects the answers it used; " +
+    "assess again to include your changes."
+  );
+}
+
+// How to show a report's takeaway. Older saved reports may hold prose ("legacy") or no
+// takeaway at all ("missing"); new reports have none only when no items are listed.
+export function takeawayKind(report) {
+  const takeaway = report.takeaway;
+  if (typeof takeaway === "string") return "legacy";
+  if (takeaway !== null && typeof takeaway === "object") return "structured";
+  const items =
+    report.remaining_considerations.length +
+    report.addressed_concerns.length +
+    report.unresolved_uncertainties.length;
+  return items > 0 ? "missing" : "empty";
+}
+
+export const NO_TAKEAWAY_TEXT = Object.freeze({
+  empty: "This assessment has no takeaway because it lists no concerns or uncertainties.",
+  missing: "No takeaway was recorded; read the detailed sections.",
+});
+
+// What a finished read of the saved assessment changes on screen, or null to change
+// nothing: the read belongs to a navigation that is no longer current (another batch is
+// shown), or an assessment started on this page meanwhile (it is newer). `latest` is the
+// response, or null when the request failed.
+export function savedAssessmentUpdate(latest, { current, assessing, shown, savedDuringRead }) {
+  if (!current || assessing || shown !== null) return null;
+  const assessment = latest?.assessment ?? null;
+  return {
+    assessment,
+    // An answer saved during the read may not be reflected in the server's comparison.
+    stale: assessment !== null && savedDuringRead,
+    note: assessment === null ? savedAssessmentNote(latest) : null,
+  };
+}

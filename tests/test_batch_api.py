@@ -1068,3 +1068,312 @@ def test_reopening_reports_batch_errors_like_viewing(runs: Path, client: TestCli
     assert client.get(_LATEST.format(_ROUND_1)).status_code == 409  # never overwritten
     (directory / "clarification.json").write_text("{not json")
     assert client.get(_LATEST.format(_ROUND_1)).status_code == 409
+
+
+# --- Follow-up questions from an assessment (fake model; nothing reaches the network) ---
+
+_ASSESSED = "20260101T000000Z-aaa111"
+_FOLLOWUP_BATCH = {
+    "questions": [
+        {
+            "question": "Which room could the cats be kept apart in?",
+            "why_it_matters": "It decides whether an unsettled introduction has a fallback.",
+            "source_finding_ids": ["e1-f2"],
+        }
+    ]
+}
+
+
+def _followup(client: TestClient, batch: str = _ROUND_1, rid: str = _ASSESSED) -> Any:
+    return client.post(
+        f"/clarifications/{batch}/followups",
+        json={"reassessment_id": rid, "confirm_paid_request": True},
+    )
+
+
+def _assessed_round_1(runs: Path, client: TestClient) -> Path:
+    """A round-1 batch with current answers and a saved assessment that leaves a concern."""
+    directory = _round_1(runs)
+    _answer_round_1(client)
+    _save_assessment(directory, _ASSESSED, "2026-01-01T00:00:00+00:00")
+    return directory
+
+
+def _followup_dirs(runs: Path) -> list[Path]:
+    return sorted(p for p in (runs / _RUN).glob("clarify-*") if p.name != _ROUND_1)
+
+
+def test_followup_creates_a_round_2_batch_from_the_named_assessment(
+    runs: Path, client: TestClient, model: _FakeModel
+) -> None:
+    directory = _assessed_round_1(runs, client)
+    before = _digest(directory)
+    model.outcomes.append(_message(json.dumps(_FOLLOWUP_BATCH)))
+
+    response = _followup(client)
+
+    assert response.status_code == 200
+    body = response.json()
+    (created,) = _followup_dirs(runs)
+    assert body == {
+        "batch_id": _ROUND_1,
+        "reassessment_id": _ASSESSED,
+        "followup_batch_id": created.name,
+        "question_count": 1,
+        "no_useful_followup": False,
+        "open_concerns": True,
+        "reused": False,
+        "answers_changed_during_generation": False,
+    }
+    assert len(model.calls) == 1
+    assert "Ten weeks; one vaccine." in model.user_content()  # the assessed answers
+    assert _digest(directory) == before  # round-1 files are never changed
+    saved = json.loads((created / "clarification.json").read_text())
+    assert saved["round"] == 2
+    assert saved["previous"]["reassessment_id"] == _ASSESSED
+    # The new batch opens in the answering API, with round-1 answers read-only.
+    view = client.get(f"/clarifications/{created.name}").json()
+    assert view["round"] == 2 and view["next_question_id"] == "q4"
+    assert [(q["id"], q["editable"]) for q in view["questions"]] == [
+        ("q1", False), ("q2", False), ("q3", False), ("q4", True)
+    ]  # fmt: skip
+    assert view["questions"][0]["answer"] == "Ten weeks; one vaccine."
+    assert client.get(f"/clarifications/{_ROUND_1}").json()["followup_running"] is False
+
+
+def test_zero_followup_questions_keep_the_assessment_as_the_conclusion(
+    runs: Path, client: TestClient, model: _FakeModel
+) -> None:
+    _assessed_round_1(runs, client)
+    model.outcomes.append(_message(json.dumps({"questions": []})))
+
+    body = _followup(client).json()
+
+    assert body["no_useful_followup"] is True and body["question_count"] == 0
+    assert body["open_concerns"] is True
+    (created,) = _followup_dirs(runs)
+    generation = json.loads((created / "clarification.json").read_text())["question_generation"]
+    assert generation["no_useful_followup"] is True
+    # Asking again reuses that outcome without another request.
+    again = _followup(client).json()
+    assert again["reused"] is True and again["followup_batch_id"] == created.name
+    assert len(model.calls) == 1
+
+
+def test_a_successful_followup_is_reused_without_another_request(
+    runs: Path, client: TestClient, model: _FakeModel
+) -> None:
+    _assessed_round_1(runs, client)
+    model.outcomes.append(_message(json.dumps(_FOLLOWUP_BATCH)))
+    first = _followup(client).json()
+
+    second = _followup(client)
+
+    assert second.status_code == 200
+    assert second.json()["reused"] is True
+    assert second.json()["followup_batch_id"] == first["followup_batch_id"]
+    assert len(model.calls) == 1 and len(_followup_dirs(runs)) == 1
+
+
+def test_a_failed_followup_is_saved_explained_and_retried_only_when_asked(
+    runs: Path, client: TestClient, model: _FakeModel
+) -> None:
+    directory = _assessed_round_1(runs, client)
+    model.outcomes.append(_message(f"Not JSON: {_SECRET}"))
+
+    failed = _followup(client)
+
+    assert failed.status_code == 502
+    detail = failed.json()["detail"]
+    assert "expected question format" in detail and "nothing was retried" in detail
+    assert _SECRET not in detail
+    (failed_dir,) = _followup_dirs(runs)
+    assert failed_dir.name in detail
+    assert json.loads((failed_dir / "clarification.json").read_text())["status"] == "failed"
+    assert len(model.calls) == 1
+    assert client.get(f"/clarifications/{_ROUND_1}").json()["followup_running"] is False
+    assert _responses(directory)["q1"] == ("answered", "Ten weeks; one vaccine.")
+
+    # The failure isn't reused: an explicit retry makes one new request.
+    model.outcomes.append(_message(json.dumps(_FOLLOWUP_BATCH)))
+    retried = _followup(client)
+
+    assert retried.status_code == 200 and retried.json()["reused"] is False
+    assert retried.json()["followup_batch_id"] != failed_dir.name
+    assert len(model.calls) == 2
+
+
+def test_changed_answers_require_reassessment_first(
+    runs: Path, client: TestClient, model: _FakeModel
+) -> None:
+    _assessed_round_1(runs, client)
+    _answer(client, _ROUND_1, "q2", {"status": "answered", "answer": "The spare room."})
+
+    response = _followup(client)
+
+    assert response.status_code == 409
+    assert "Assess your answers again first" in response.json()["detail"]
+    assert model.calls == [] and _followup_dirs(runs) == []
+
+
+def test_changed_answers_block_even_reuse_of_an_earlier_followup(
+    runs: Path, client: TestClient, model: _FakeModel
+) -> None:
+    _assessed_round_1(runs, client)
+    model.outcomes.append(_message(json.dumps(_FOLLOWUP_BATCH)))
+    assert _followup(client).status_code == 200
+    _answer(client, _ROUND_1, "q2", {"status": "answered", "answer": "The spare room."})
+
+    assert _followup(client).status_code == 409
+    assert len(model.calls) == 1
+
+
+def test_a_round_2_batch_cannot_start_another_round(
+    runs: Path, client: TestClient, model: _FakeModel
+) -> None:
+    _round_2(runs)
+
+    response = _followup(client, _ROUND_2)
+
+    assert response.status_code == 409
+    assert "only one follow-up round" in response.json()["detail"]
+    assert model.calls == []
+
+
+@pytest.mark.parametrize("rid", ["20990101T000000Z-ffffff", "../x", "a/b", "x.json"])
+def test_unknown_assessment_ids_are_not_found(
+    runs: Path, client: TestClient, model: _FakeModel, rid: str
+) -> None:
+    _assessed_round_1(runs, client)
+
+    assert _followup(client, rid=rid).status_code == 404
+    assert model.calls == []
+
+
+def test_unusable_assessments_and_invalid_lineage_are_refused_before_any_call(
+    runs: Path, client: TestClient, model: _FakeModel
+) -> None:
+    directory = _round_1(runs)
+    _answer_round_1(client)
+    # Another valid round-1 batch elsewhere in runs/, which a saved file could name.
+    other = _round_1(runs, name="clarify-20260101T000300Z-ccc333", parent="team-other")
+    cases: dict[str, dict[str, Any]] = {
+        "20260101T000000Z-failed": {"status": "failed"},
+        "20260101T000000Z-foreign": {"clarification_id": "eval-other"},
+        "20260101T000000Z-closed": {
+            "report": {**_ROUND_1_REPORT, "remaining_considerations": []},
+        },
+        "20260101T000000Z-elsewhere": {"clarification_file": str(other / "clarification.json")},
+        "20260101T000000Z-research": {
+            "research": {
+                "research_id": "research-x",
+                "research_file": "research-missing.json",
+                "source_ids": [],
+            }
+        },
+        "20260101T000000Z-coverage": {"unanswered_question_ids": ["q1"]},
+    }
+    for rid, extra in cases.items():
+        _save_assessment(directory, rid, "2026-01-01T00:00:00+00:00", **extra)
+
+    for rid in cases:
+        response = _followup(client, rid=rid)
+        assert response.status_code == 409, rid
+        assert "No request was made" in response.json()["detail"], rid
+        assert str(runs) not in response.json()["detail"], rid
+    assert model.calls == [] and _followup_dirs(runs) == []
+    assert list((runs / "team-other").glob("clarify-*")) == [other]
+
+
+def test_followup_requires_explicit_confirmation(
+    runs: Path, client: TestClient, model: _FakeModel
+) -> None:
+    _assessed_round_1(runs, client)
+    for payload in (
+        {"reassessment_id": _ASSESSED},
+        {"reassessment_id": _ASSESSED, "confirm_paid_request": False},
+        {"reassessment_id": _ASSESSED, "confirm_paid_request": True, "path": "/tmp/x"},
+    ):
+        assert client.post(f"/clarifications/{_ROUND_1}/followups", json=payload).status_code == 422
+    assert model.calls == []
+
+
+def test_followup_without_model_configuration_makes_no_call(
+    runs: Path, client: TestClient, model: _FakeModel, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _assessed_round_1(runs, client)
+    monkeypatch.delenv("ANTHROPIC_MODEL")
+
+    response = _followup(client)
+
+    assert response.status_code == 503
+    assert "ANTHROPIC" not in response.json()["detail"]
+    assert model.calls == [] and _followup_dirs(runs) == []
+    assert client.get(f"/clarifications/{_ROUND_1}").json()["followup_running"] is False
+
+
+def test_one_paid_request_at_a_time_and_answers_frozen_during_generation(
+    runs: Path, client: TestClient, model: _FakeModel
+) -> None:
+    directory = _assessed_round_1(runs, client)
+    model.outcomes.append(_message(json.dumps(_FOLLOWUP_BATCH)))
+    model.release.clear()
+    first: dict[str, Any] = {}
+
+    def run_first() -> None:
+        response = _followup(client)
+        first.update(status=response.status_code, body=response.json())
+
+    thread = threading.Thread(target=run_first)
+    thread.start()
+    assert model.started.wait(5)
+    try:
+        # A repeated click or another tab is refused without a call, as is an assessment.
+        second = _followup(client)
+        assert second.status_code == 409 and "already running" in second.json()["detail"]
+        assess = client.post(f"/clarifications/{_ROUND_1}/reassessments", json=_CONFIRM)
+        assert assess.status_code == 409
+        assert "Follow-up generation" in assess.json()["detail"]
+        change = client.put(
+            f"/clarifications/{_ROUND_1}/responses/q2",
+            json={"status": "answered", "answer": "The spare room."},
+        )
+        assert change.status_code == 409 and "Nothing was saved" in change.json()["detail"]
+        view = client.get(f"/clarifications/{_ROUND_1}").json()
+        assert view["followup_running"] is True and view["assessment_running"] is False
+        # An edit outside the API can't be prevented; it's reported, not silently used.
+        data = json.loads((directory / "responses.json").read_text())
+        data["responses"][1].update(status="answered", answer="Edited by hand.")
+        (directory / "responses.json").write_text(json.dumps(data))
+    finally:
+        model.release.set()
+        thread.join(5)
+
+    assert first["status"] == 200
+    assert first["body"]["answers_changed_during_generation"] is True
+    assert len(model.calls) == 1
+    (created,) = _followup_dirs(runs)
+    prior = json.loads((created / "clarification.json").read_text())["prior_responses"]
+    assert prior[1]["status"] == "dont_know"  # the assessed answers, not the edit
+    assert client.get(f"/clarifications/{_ROUND_1}").json()["followup_running"] is False
+
+
+def test_a_running_assessment_blocks_followup_generation(
+    runs: Path, client: TestClient, model: _FakeModel
+) -> None:
+    _assessed_round_1(runs, client)
+    model.outcomes.append(_message(json.dumps(_ROUND_1_REPORT)))
+    model.release.clear()
+    thread = threading.Thread(
+        target=lambda: client.post(f"/clarifications/{_ROUND_1}/reassessments", json=_CONFIRM)
+    )
+    thread.start()
+    assert model.started.wait(5)
+    try:
+        response = _followup(client)
+        assert response.status_code == 409
+        assert "An assessment of this batch is already running" in response.json()["detail"]
+    finally:
+        model.release.set()
+        thread.join(5)
+    assert len(model.calls) == 1

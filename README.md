@@ -478,7 +478,26 @@ http://127.0.0.1:8000/ui?batch=clarify-kitten-example.
 - **Refreshing never repeats a paid request.** One still running is shown as "already
   running" until it ends; reload afterwards to see its result. Leaving the page doesn't
   cancel a running assessment; its result is still saved.
-- The screen doesn't create plans or run research or follow-ups; use the CLI. A follow-up
+- **"Ask follow-up questions"** appears under a round-1 "Current assessment" that still
+  lists remaining concerns or unresolved uncertainties. It runs the same follow-up
+  generation as `followup` (**one paid model request**, stated next to the button, only on
+  a click) from the exact assessment shown.
+  - **When it's blocked:** if your answers changed after that assessment (or were edited
+    elsewhere while it ran), the button is replaced by "Assess again first", and "Assess
+    again" becomes the main action.
+  - **Success:** the new round-2 batch opens in the same screen (the URL changes, so Back
+    returns), with round-1 answers read-only.
+  - **No useful questions:** the assessment stays on screen as the conclusion available
+    for this session.
+  - **Failure:** the assessment stays with the reason. "Try again" (a new paid request) is
+    offered only when retrying can help: a failed model call, no response from the
+    server, or an unexpected server error. Refusals (answers changed, already running)
+    keep the normal button label.
+  - **While it runs:** answers can't be changed. If you reload meanwhile, nothing is shown
+    automatically. Once it has finished, pressing the button again opens the saved
+    questions at no charge; if it failed, it's a new paid request.
+  - **Limits:** a follow-up batch never offers a further round.
+- The screen doesn't create plans or run research; use the CLI. A follow-up
   batch's carried round-1 research is included automatically; other research files can
   only be added with `reassess --research`.
 
@@ -493,8 +512,8 @@ orange details (5.2:1 on white).
 
 The FastAPI app can show a saved batch (round 1 or a follow-up), save answers one at a
 time, and assess them. Viewing and saving use the same file, validation, and atomic writes
-as `answer` and need no API key. **Only the assessment endpoint calls a model** (one paid
-request, with the server's own key); research and follow-ups stay CLI commands.
+as `answer` and need no API key. **Only the assessment and follow-up endpoints call a
+model** (one paid request each, with the server's own key); research stays a CLI command.
 
 ```bash
 uv run uvicorn blindspot.main:app --reload   # from the repository root; reads ./runs
@@ -525,9 +544,10 @@ check `editable` in the `GET` response.
 
 | Endpoint | What it does |
 | --- | --- |
-| `GET /clarifications/{batch_id}` | Batch ID, `clarification_id`, `round`, `plan`, `responses_saved`, `next_question_id` (first question of this round with no response), and `questions`: `id`, `round`, `question`, `why_it_matters`, `perspectives`, `source_finding_ids`, `status`, `answer`, `editable`; plus `assessment_running`. Never creates files. |
-| `PUT /clarifications/{batch_id}/responses/{question_id}` | Body `{"status": …, "answer": …}`. Saves that one response in the batch's `responses.json` (created from the template if missing) and returns the updated batch. Other entries, the instructions, and the reference `question` fields are kept. Refused (409) while an assessment of the batch is running. |
+| `GET /clarifications/{batch_id}` | Batch ID, `clarification_id`, `round`, `plan`, `responses_saved`, `next_question_id` (first question of this round with no response), and `questions`: `id`, `round`, `question`, `why_it_matters`, `perspectives`, `source_finding_ids`, `status`, `answer`, `editable`; plus `assessment_running` and `followup_running`. Never creates files. |
+| `PUT /clarifications/{batch_id}/responses/{question_id}` | Body `{"status": …, "answer": …}`. Saves that one response in the batch's `responses.json` (created from the template if missing) and returns the updated batch. Other entries, the instructions, and the reference `question` fields are kept. Refused (409) while an assessment of the batch or follow-up generation from it is running. |
 | `GET /clarifications/{batch_id}/assessments/latest` | **Read only; never calls a model.** Returns `{"assessment": …, "unusable_files": n}`. `assessment` is the latest successful saved assessment of this batch (`null` if none): the `POST` response's fields except `answers_changed_during_assessment`, plus `created_at` and `based_on_earlier_answers`. `report` may hold an older prose takeaway or none. |
+| `POST /clarifications/{batch_id}/followups` | **One paid model request, unless reused.** Body must be exactly `{"reassessment_id": "<id>", "confirm_paid_request": true}`. Runs `followup` from that saved round-1 assessment and returns `followup_batch_id` (the new round-2 batch), `question_count`, `no_useful_followup`, `open_concerns`, `reused`, and `answers_changed_during_generation`. A successful follow-up already generated from the same assessment is returned with `reused: true` and no request. |
 | `POST /clarifications/{batch_id}/reassessments` | **One paid model request.** Body must be exactly `{"confirm_paid_request": true}`. Runs `reassess` on the batch's `clarification.json` and `responses.json` (a follow-up's carried research included), saves `reassessment-<id>.json`, and returns `reassessment_id`, `round`, `conclusion_status`, `report`, `closing_note`, `assessed_responses` (the answers used, both rounds in a follow-up), `answers_changed_during_assessment`, and `used_research`. One at a time per batch. |
 
 - **Statuses** are the response-file ones: `answered` (text required), `dont_know` (no text),
@@ -550,6 +570,23 @@ check `editable` in the `GET` response.
   `recorded_responses` match what was assessed. Edits made outside the API during the call
   (by hand or with the CLI) can't be blocked; the response then has
   `answers_changed_during_assessment: true`.
+- **Follow-up questions** are refused before any request:
+  - with 422 without the confirmation;
+  - with 404 for an unknown assessment ID;
+  - with 409 for:
+    - a follow-up batch (only one follow-up round);
+    - an assessment that failed, is invalid, belongs to another batch, or lists nothing
+      open;
+    - answers changed since that assessment (assess again first);
+    - lineage or research that doesn't pass the `followup` checks, or that points outside
+      the batch or `runs/`;
+    - a paid request for the batch already running;
+  - with 503 without model configuration.
+
+  While one runs, `PUT` and assessment return 409. Hand or CLI edits during the call are
+  reported as `answers_changed_during_generation: true`; the follow-up carries the
+  assessed answers. A failed call returns 502, is saved as a failed `clarify-*` folder,
+  and isn't reused, so the next request is a new paid one.
 - **Reopening a saved assessment** reads only the batch folder's `reassessment-*.json`
   files.
   - **Selection:** the latest by saved `created_at`; ties go to the larger

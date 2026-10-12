@@ -60,6 +60,8 @@
 
       <!-- The batch -->
       <section id="batch-view" hidden>
+        <p id="batch-notice" class="inline-note" hidden></p>
+
         <div class="progress-row">
           <p id="progress-text" class="progress-text"></p>
           <progress id="progress-bar" max="1" value="0" aria-labelledby="progress-text"></progress>
@@ -168,6 +170,42 @@
           </details>
 
           <p id="result-next" class="hint"></p>
+        </section>
+
+        <!-- Explicitly ask follow-up questions from the assessment shown (one paid request) -->
+        <section id="followup-card" class="card" aria-labelledby="followup-title" hidden>
+          <h2 id="followup-title" class="section-title" tabindex="-1">Ask follow-up questions</h2>
+          <p id="followup-intro">
+            Blindspot can ask up to three more questions about the concerns that are still
+            open. Your round-1 answers stay as they are.
+          </p>
+          <p id="followup-blocked" class="inline-note" hidden>
+            Your answers changed after this assessment. Assess again first, then ask follow-up
+            questions.
+          </p>
+          <p id="followup-elsewhere" class="inline-note" hidden>
+            Follow-up questions are already being generated for this batch, perhaps in another
+            tab. Answers can't be changed until it finishes. Then reload and press the button
+            to open them; that won't charge again if it succeeded.
+          </p>
+          <div id="followup-action">
+            <p class="cost-note">
+              <strong>This makes one paid model request.</strong> It runs only when you press
+              the button. If follow-up questions were already generated from this assessment,
+              they open without a new charge.
+            </p>
+            <button id="followup-button" type="button" class="button primary">
+              Ask follow-up questions
+            </button>
+          </div>
+          <p id="followup-waiting" class="waiting" role="status" hidden>
+            Generating follow-up questions. This can take up to a minute. Your answers can't be
+            changed until it finishes. If you reload, nothing is shown here automatically. Once
+            it has finished, pressing the button opens the saved questions at no charge. If it
+            failed, pressing it again makes a new paid request.
+          </p>
+          <p id="followup-none" tabindex="-1" hidden></p>
+          <p id="followup-error" class="save-error" role="alert" hidden></p>
         </section>
 
         <!-- Explicitly assess this round's answers (one paid request) -->

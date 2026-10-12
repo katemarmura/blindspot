@@ -255,6 +255,16 @@ export function isOutdated(result, changedOnPage) {
   return result !== null && (changedOnPage || result.based_on_earlier_answers === true);
 }
 
+// Whether the result should be assessed again before anything builds on it: it is
+// outdated, or answers were edited outside this screen while it ran (the server compares
+// the saved answers and refuses a follow-up either way). Both the follow-up block and the
+// primary "Assess again" button use this.
+export function needsReassessment(result, changedOnPage) {
+  return (
+    isOutdated(result, changedOnPage) || result?.answers_changed_during_assessment === true
+  );
+}
+
 export function outdatedNote(result, changedOnPage) {
   if (!isOutdated(result, changedOnPage)) return null;
   if (result.created_at !== undefined) {
@@ -299,5 +309,94 @@ export function savedAssessmentUpdate(latest, { current, assessing, shown, saved
     // An answer saved during the read may not be reflected in the server's comparison.
     stale: assessment !== null && savedDuringRead,
     note: assessment === null ? savedAssessmentNote(latest) : null,
+  };
+}
+
+// --- Follow-up questions (round 2) ---
+
+function hasOpenItems(report) {
+  return report.remaining_considerations.length + report.unresolved_uncertainties.length > 0;
+}
+
+// Whether to offer "Ask follow-up questions" for the result on screen: only a round-1
+// current assessment that still lists something open. When answers changed since it (or
+// while it ran), the action is blocked until the user assesses again (the server refuses
+// it too).
+export function followupAvailability(result, changedOnPage) {
+  if (
+    result === null ||
+    result.round !== 1 ||
+    result.conclusion_status !== "current_assessment" ||
+    !hasOpenItems(result.report)
+  ) {
+    return { offered: false, blocked: false };
+  }
+  return { offered: true, blocked: needsReassessment(result, changedOnPage) };
+}
+
+// The POST body: the exact assessment on screen, with the explicit paid-request flag.
+export function followupRequestBody(result) {
+  return { reassessment_id: result.reassessment_id, confirm_paid_request: true };
+}
+
+// What a successful response means for the screen: open the new round-2 batch, or stay
+// and show that there is no useful follow-up.
+export function followupOutcome(view) {
+  if (view.no_useful_followup) {
+    return {
+      open: null,
+      message:
+        "No useful follow-up questions were found. The assessment above is the conclusion " +
+        "available for this session." +
+        (view.open_concerns
+          ? " Some concerns are still open; this doesn't mean the plan is risk-free."
+          : ""),
+    };
+  }
+  const count = view.question_count;
+  const notice = view.answers_changed_during_generation
+    ? "Your round-1 answers were edited outside this screen while the follow-up questions " +
+      "were generated. The follow-up uses the answers that were assessed, shown below as " +
+      "earlier answers."
+    : null;
+  const ready =
+    `${count} follow-up ${count === 1 ? "question" : "questions"} ready. Round-1 answers ` +
+    "are shown read-only below.";
+  return {
+    open: view.followup_batch_id,
+    // Focus moves to the first question, so the notice is announced as well as shown.
+    announcement: notice ? `${ready} ${notice}` : ready,
+    notice,
+  };
+}
+
+// What to show when a follow-up request fails, and whether trying again can help (the
+// button then reads "Try again"). Only a failed model call (502), an unknown outcome
+// (network), or an unexpected server error can succeed on a retry; the other statuses
+// (stale answers, invalid lineage, round 2, already running, not configured) need
+// something else to change first. Server messages for the known statuses are written for
+// people and contain no model output.
+export function describeFollowupError(failure) {
+  if (failure.network) {
+    return {
+      message:
+        "The server didn't respond, so the outcome isn't known: follow-up questions may " +
+        "still have been generated. Once it has finished, pressing the button opens saved " +
+        "questions at no charge; if none were saved, it makes a new paid request.",
+      retryable: true,
+    };
+  }
+  const detail = detailText(failure.detail);
+  if (detail && failure.status === 502) {
+    return { message: `${detail} You can try again (another paid request).`, retryable: true };
+  }
+  if (detail && [403, 404, 409, 422, 503].includes(failure.status)) {
+    return { message: detail, retryable: false };
+  }
+  return {
+    message:
+      "Follow-up questions couldn't be generated because of a server error. Nothing was " +
+      "changed. You can try again (another paid request).",
+    retryable: true,
   };
 }

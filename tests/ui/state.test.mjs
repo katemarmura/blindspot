@@ -11,12 +11,17 @@ import {
   createNavigation,
   describeAssessmentError,
   describeLoadError,
+  describeFollowupError,
   describeSaveError,
   editableQuestions,
+  followupAvailability,
+  followupOutcome,
+  followupRequestBody,
   initialText,
   formatSavedDate,
   isOutdated,
   isPlausibleBatchId,
+  needsReassessment,
   NO_TAKEAWAY_TEXT,
   nextQuestionId,
   outdatedNote,
@@ -300,4 +305,122 @@ test("applying a saved assessment: shown, missing, unusable, failed, or saved-du
       .stale,
     true,
   );
+});
+
+// --- Follow-up questions (fictional data) ---
+
+const openItem = { summary: "x", source_finding_ids: ["e1-f1"], question_ids: [] };
+
+test("follow-ups are offered only for a round-1 current assessment with open items", () => {
+  const open = saved({ report: report({ unresolved_uncertainties: [openItem] }) });
+  assert.deepEqual(followupAvailability(open, false), { offered: true, blocked: false });
+  assert.deepEqual(followupAvailability(saved(), false), { offered: false, blocked: false });
+  const round2 = { ...open, round: 2, conclusion_status: "review_conclusion" };
+  assert.equal(followupAvailability(round2, false).offered, false);
+  assert.equal(followupAvailability(null, false).offered, false);
+  const remaining = saved({ report: report({ remaining_considerations: [openItem] }) });
+  assert.equal(followupAvailability(remaining, false).offered, true);
+});
+
+test("follow-ups are blocked while the assessment is outdated", () => {
+  const open = report({ unresolved_uncertainties: [openItem] });
+  assert.deepEqual(
+    followupAvailability(saved({ report: open, based_on_earlier_answers: true }), false),
+    { offered: true, blocked: true },
+  );
+  assert.equal(followupAvailability(saved({ report: open }), true).blocked, true);
+});
+
+test("an assessment whose answers were edited while it ran needs reassessing", () => {
+  // A fresh POST …/reassessments result: no created_at or based_on_earlier_answers.
+  const fresh = {
+    reassessment_id: "20260101T000000Z-aaa111",
+    round: 1,
+    conclusion_status: "current_assessment",
+    report: report({ unresolved_uncertainties: [openItem] }),
+    answers_changed_during_assessment: false,
+  };
+  assert.equal(needsReassessment(fresh, false), false);
+  assert.deepEqual(followupAvailability(fresh, false), { offered: true, blocked: false });
+  const edited = { ...fresh, answers_changed_during_assessment: true };
+  assert.equal(needsReassessment(edited, false), true);
+  assert.deepEqual(followupAvailability(edited, false), { offered: true, blocked: true });
+  // The outdated note isn't repeated: the result already says answers were edited.
+  assert.equal(outdatedNote(edited, false), null);
+  assert.equal(needsReassessment(saved({ based_on_earlier_answers: true }), false), true);
+  assert.equal(needsReassessment(saved(), true), true);
+  assert.equal(needsReassessment(null, true), false);
+});
+
+test("the request names the assessment on screen and confirms the paid request", () => {
+  assert.deepEqual(followupRequestBody(saved()), {
+    reassessment_id: "20260101T000000Z-aaa111",
+    confirm_paid_request: true,
+  });
+});
+
+test("a follow-up with questions opens the new batch", () => {
+  const view = {
+    followup_batch_id: "clarify-r2",
+    question_count: 2,
+    no_useful_followup: false,
+    open_concerns: true,
+    reused: false,
+    answers_changed_during_generation: false,
+  };
+  const outcome = followupOutcome(view);
+  assert.equal(outcome.open, "clarify-r2");
+  assert.match(outcome.announcement, /^2 follow-up questions ready/);
+  assert.equal(outcome.notice, null);
+  const edited = followupOutcome({ ...view, answers_changed_during_generation: true });
+  assert.match(edited.notice, /edited outside this screen/);
+  // Focus moves to the first question, so the announcement carries the notice too.
+  assert.equal(
+    edited.announcement,
+    `2 follow-up questions ready. Round-1 answers are shown read-only below. ${edited.notice}`,
+  );
+  assert.doesNotMatch(outcome.announcement, /edited outside/);
+  assert.match(followupOutcome({ ...view, question_count: 1 }).announcement, /^1 follow-up question ready/);
+});
+
+test("no useful follow-up stays on the assessment", () => {
+  const view = { followup_batch_id: "clarify-r2", question_count: 0, no_useful_followup: true };
+  const open = followupOutcome({ ...view, open_concerns: true });
+  assert.equal(open.open, null);
+  assert.match(open.message, /^No useful follow-up questions were found\. The assessment above/);
+  assert.match(open.message, /doesn't mean the plan is risk-free/);
+  assert.doesNotMatch(followupOutcome({ ...view, open_concerns: false }).message, /risk-free/);
+});
+
+test("follow-up errors: server text passes through; only 502 offers a paid retry", () => {
+  assert.match(describeFollowupError({ network: true }).message, /outcome isn't known/);
+  assert.equal(
+    describeFollowupError({ status: 409, detail: "Assess your answers again first." }).message,
+    "Assess your answers again first.",
+  );
+  assert.match(
+    describeFollowupError({ status: 502, detail: "The model's response was cut off." }).message,
+    /cut off\. You can try again \(another paid request\)\.$/,
+  );
+  const raw = describeFollowupError({ status: 500, detail: "<html>Traceback</html>" });
+  assert.doesNotMatch(raw.message, /Traceback/);
+});
+
+test("follow-up errors: only a failed call, unknown outcome, or server error is retryable", () => {
+  assert.equal(describeFollowupError({ network: true }).retryable, true);
+  assert.equal(describeFollowupError({ status: 502, detail: "Cut off." }).retryable, true);
+  assert.equal(describeFollowupError({ status: 500, detail: "<html>x</html>" }).retryable, true);
+  assert.equal(describeFollowupError({ status: 418 }).retryable, true);
+  for (const status of [403, 404, 409, 422, 503]) {
+    assert.equal(describeFollowupError({ status, detail: "Refused." }).retryable, false, status);
+  }
+});
+
+test("a follow-up response after navigation belongs to a stale ticket", () => {
+  const navigation = createNavigation();
+  navigation.begin(); // batch A shown
+  const ticket = navigation.current(); // follow-up requested on A
+  assert.equal(navigation.isCurrent(ticket), true);
+  navigation.begin(); // the user opens another batch, or goes back
+  assert.equal(navigation.isCurrent(ticket), false); // so the late result opens nothing
 });

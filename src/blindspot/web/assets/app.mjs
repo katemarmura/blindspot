@@ -1,6 +1,7 @@
 // The answering screen: open a saved batch, show one question at a time, save each
 // response, and (only when asked) assess the saved answers, through the HTTP API:
-// GET /clarifications/{id}, PUT …/responses/{qid}, POST …/reassessments. Opening a batch
+// GET /clarifications/{id}, PUT …/responses/{qid}, POST …/reassessments, and (only when
+// asked) POST …/followups, which opens the new round-2 batch. Opening a batch
 // also reads its latest saved assessment (GET …/assessments/latest), which never calls a
 // model.
 // All saved, model, and server text is inserted with textContent, never parsed as HTML.
@@ -11,13 +12,17 @@ import {
   conclusionHeading,
   createNavigation,
   describeAssessmentError,
+  describeFollowupError,
   describeLoadError,
   describeSaveError,
   editableQuestions,
+  followupAvailability,
+  followupOutcome,
+  followupRequestBody,
   initialText,
-  isOutdated,
   isPlausibleBatchId,
   NO_TAKEAWAY_TEXT,
+  needsReassessment,
   nextQuestionId,
   outdatedNote,
   priorQuestions,
@@ -45,6 +50,10 @@ const state = {
   assessmentError: null,
   savedNote: null, // why a saved assessment couldn't be shown, if one couldn't
   savesCompleted: 0, // answers saved on this page, to spot a save during a read
+  followingUp: false, // a follow-up request from this page is pending
+  followupError: null, // {message, retryable} from describeFollowupError
+  followupNone: null, // "no useful follow-up" message for the assessment on screen
+  notice: null, // a one-off note for the batch just opened
 };
 
 // Each load and save checks it still belongs to the current navigation before touching
@@ -61,6 +70,10 @@ function navigate() {
   state.assessmentStale = false;
   state.assessmentError = null;
   state.savedNote = null;
+  state.followingUp = false;
+  state.followupError = null;
+  state.followupNone = null;
+  state.notice = null;
   return navigation.begin();
 }
 
@@ -138,8 +151,9 @@ function setFieldError(field, element, message) {
 
 // --- Loading a batch ---
 
-async function load(batchId) {
+async function load(batchId, { notice = null, announcement = null } = {}) {
   const ticket = navigate();
+  state.notice = notice;
   state.batchId = batchId;
   state.batch = null;
   show("loading-view");
@@ -151,6 +165,7 @@ async function load(batchId) {
     render();
     show("batch-view");
     focusHeading();
+    if (announcement) announce(announcement);
   } catch (error) {
     if (!navigation.isCurrent(ticket)) return; // includes the abort itself
     if (!(error instanceof RequestFailure)) throw error;
@@ -196,6 +211,8 @@ function render() {
   const batch = state.batch;
   const question = editableQuestions(batch).find((q) => q.id === state.currentId) ?? null;
   if (question === null) state.currentId = null;
+  $("batch-notice").hidden = !state.notice;
+  $("batch-notice").textContent = state.notice ?? "";
 
   renderProgress(batch, question);
   $("plan-text").textContent = batch.plan;
@@ -208,6 +225,7 @@ function render() {
   renderAssess(batch, question);
   renderResult();
   renderSavedNote();
+  renderFollowup(batch);
 
   renderList($("review-list"), editableQuestions(batch), { editable: true });
   const prior = priorQuestions(batch);
@@ -324,6 +342,7 @@ function renderAssessmentParts() {
   renderAssess(state.batch, question);
   renderResult();
   renderSavedNote();
+  renderFollowup(state.batch);
   applyBusy();
 }
 
@@ -350,11 +369,13 @@ function renderAssess(batch, question) {
   $("assess-ineligible").hidden = eligible;
   $("assess-ineligible").textContent = reason ?? "";
 
+  // A follow-up being generated elsewhere blocks assessing too (the server refuses it).
   // Started elsewhere (another tab, or before a reload): this page can't show its result
   // live; it appears after a reload once the assessment finishes.
   const elsewhere = batch.assessment_running && !state.assessing;
   $("assess-elsewhere").hidden = !elsewhere;
-  $("assess-action").hidden = !eligible || elsewhere;
+  $("assess-action").hidden =
+    !eligible || elsewhere || (batch.followup_running && !state.followingUp);
 
   $("assess-button").textContent = state.assessing
     ? "Assessing…"
@@ -363,9 +384,11 @@ function renderAssess(batch, question) {
       : state.assessment
         ? "Assess again"
         : "Assess my answers";
-  // After a current result, assessing again is a secondary choice (another paid request).
+  // After a current result, assessing again is a secondary choice (another paid request);
+  // it stays primary when the result needs reassessing (the follow-up is blocked then).
   const secondary =
-    state.assessment !== null && !isOutdated(state.assessment, state.assessmentStale) &&
+    state.assessment !== null &&
+    !needsReassessment(state.assessment, state.assessmentStale) &&
     !state.assessing;
   $("assess-button").classList.toggle("primary", !secondary);
   $("assess-button").classList.toggle("secondary", secondary);
@@ -430,8 +453,7 @@ function renderResult() {
 
   $("result-next").textContent =
     result.round === 1
-      ? "This is the current assessment after round 1. One follow-up round can be generated " +
-        "from the command line (one more paid request); this screen doesn't start it."
+      ? "This is the current assessment after round 1. Blindspot supports one follow-up round."
       : "This is the conclusion of the review; Blindspot supports only one follow-up round.";
 }
 
@@ -473,6 +495,8 @@ async function assess() {
     state.assessment = result;
     state.assessmentStale = false;
     state.savedNote = null;
+    state.followupNone = null; // a new assessment: earlier follow-up outcomes don't apply
+    state.followupError = null;
     render();
     announce(`${conclusionHeading(result.conclusion_status)} is ready.`);
     $("result-title").focus();
@@ -498,21 +522,92 @@ function openQuestion(questionId) {
   focusHeading();
 }
 
+// --- Follow-up questions ---
+
+function renderFollowup(batch) {
+  const card = $("followup-card");
+  const { offered, blocked } = followupAvailability(state.assessment, state.assessmentStale);
+  card.hidden = !offered || state.assessing;
+  if (card.hidden) return;
+
+  const none = state.followupNone;
+  const elsewhere = batch.followup_running && !state.followingUp;
+  $("followup-blocked").hidden = !blocked;
+  $("followup-elsewhere").hidden = !elsewhere;
+  $("followup-action").hidden = blocked || elsewhere || none !== null;
+  // While a question is on screen, saving its answer stays the one primary action.
+  const primary = state.currentId === null;
+  $("followup-button").classList.toggle("primary", primary);
+  $("followup-button").classList.toggle("secondary", !primary);
+  $("followup-button").textContent = state.followingUp
+    ? "Generating…"
+    : state.followupError?.retryable
+      ? "Try again"
+      : "Ask follow-up questions";
+  $("followup-waiting").hidden = !state.followingUp;
+  $("followup-none").hidden = none === null || blocked;
+  // Once there is no useful follow-up, the offer to ask more no longer applies.
+  $("followup-intro").hidden = none !== null && !blocked;
+  $("followup-none").textContent = none ?? "";
+  $("followup-error").hidden = !state.followupError;
+  $("followup-error").textContent = state.followupError?.message ?? "";
+}
+
+async function askFollowup() {
+  if (busy() || state.batch === null || state.assessment === null) return;
+  // The request names the assessment on screen and belongs to this navigation.
+  const ticket = navigation.current();
+  const body = followupRequestBody(state.assessment);
+  state.followingUp = true;
+  state.followupError = null;
+  render();
+  $("followup-title").focus();
+  announce("Generating follow-up questions.");
+  try {
+    const view = await request(`${batchPath(state.batchId)}/followups`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    if (!navigation.isCurrent(ticket)) return; // the user has moved on: open nothing
+    state.followingUp = false;
+    const outcome = followupOutcome(view);
+    if (outcome.open === null) {
+      state.followupNone = outcome.message;
+      render();
+      $("followup-none").focus();
+      announce(outcome.message);
+      return;
+    }
+    setUrl(outcome.open, { push: true });
+    load(outcome.open, { notice: outcome.notice, announcement: outcome.announcement });
+  } catch (error) {
+    if (!navigation.isCurrent(ticket)) return;
+    state.followingUp = false;
+    if (!(error instanceof RequestFailure)) throw error;
+    state.followupError = describeFollowupError(error.failure);
+    render();
+    $("followup-button").focus();
+  }
+}
+
 // --- Saving ---
 
-// While saving or assessing, every action is disabled and the text box is read-only, so
-// nothing typed after clicking can be lost, and answers can't change mid-assessment.
+// While saving, assessing, or generating follow-ups, every action is disabled and the text
+// box is read-only, so nothing typed after clicking can be lost, and answers can't change
+// while a paid request uses them.
 function busy() {
-  return state.saving || state.assessing;
+  return state.saving || state.assessing || state.followingUp;
 }
 
 function applyBusy() {
   const disabled = busy();
   $("answer-form").setAttribute("aria-busy", String(state.saving));
   $("assess-card").setAttribute("aria-busy", String(state.assessing));
+  $("followup-card").setAttribute("aria-busy", String(state.followingUp));
   $("answer-text").readOnly = disabled;
   for (const button of document.querySelectorAll(
-    "#answer-form button, #review-list button, #assess-button",
+    "#answer-form button, #review-list button, #assess-button, #followup-button",
   )) {
     button.disabled = disabled;
   }
@@ -607,6 +702,7 @@ function start() {
   }
 
   $("assess-button").addEventListener("click", assess);
+  $("followup-button").addEventListener("click", askFollowup);
   $("retry-load").addEventListener("click", () => load(state.batchId));
   for (const button of document.querySelectorAll("[data-open-another]")) {
     button.addEventListener("click", () => {

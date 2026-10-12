@@ -35,7 +35,8 @@ Implemented so far, all manual (`blindspot.clarification`, below):
 One-question-at-a-time answering exists in the terminal (`answer`), over HTTP (view and
 save one response; see `batch_api.py` below), and in a minimal browser screen at `/ui` that
 uses that API. The UI also supports explicitly starting reassessment, displaying its
-result, and reopening the latest saved one (no model call). Not yet implemented: a plan-entry screen, starting follow-ups from the UI,
+result, reopening the latest saved one (no model call), and explicitly asking follow-up
+questions from a current round-1 assessment. Not yet implemented: a plan-entry screen,
 suggested answers, more than one follow-up round, automatic stopping between
 rounds, and a tailored final conclusion. Design guidance is in `docs/project-brief.md` (UI
 direction). Preserve the existing CLI as a baseline; do not speculatively add a database,
@@ -47,7 +48,7 @@ assumptions, and retain links to original findings.
 **As of now, this repository contains a project scaffold, a small FastAPI server (health,
 viewing, answering, explicitly assessing, and reopening the latest saved assessment of a
 saved clarification batch, and a minimal
-screen at `/ui`; only the assessment endpoint calls a model), and one
+screen at `/ui`; only the assessment and follow-up endpoints call a model), and one
 small domain contract with one real LLM call (plus at most one bounded recovery call)
 built on it. It runs alone, concurrently for 1–3 caller-supplied perspectives, for a
 1–3 expert team proposed by one team-selector call (followed by one synthesis call), or
@@ -409,15 +410,16 @@ What exists:
       never written through. `_read_json` reports invalid UTF-8 as an unreadable file.
     - Writes are serialized by one lock per app.
     - **`POST /clarifications/{batch_id}/reassessments`** (body exactly
-      `{"confirm_paid_request": true}`) is the only endpoint that calls a model. It runs
+      `{"confirm_paid_request": true}`) calls a model (as does `POST …/followups`). It runs
       the existing `reassess()` on the batch's artifact and `responses.json`: round-2
       accumulation and carried `prior_research` come along; there's no research
       selection. Before any request it refuses invalid files, nothing usable to assess
       (`has_new_context`; 409), and missing configuration (`ValueError` → 503, generic
-      text). `BatchStore.running` (resolved folders, under the same lock) allows one
-      assessment per batch; while running, `PUT` is a 409 and `GET` reports
-      `assessment_running`, so the snapshot `reassess` reads is the one it records. The call
-      runs in a shielded task whose done-callback clears the flag, so a client disconnect
+      text). `BatchStore.running` (resolved folders → `"assessment"`/`"followup"`, under
+      the same lock) allows one paid request per batch; while running, `PUT` is a 409 and
+      `GET` reports `assessment_running` (or `followup_running`), so the snapshot
+      `reassess` reads is the one it records. The call runs in a shielded task whose
+      done-callback clears the flag, so a client disconnect
       can't lose the saved file. A failed call is a 502 whose text comes from diagnostics
       (`_failure_message`), never model output. Success returns `AssessmentView`
       (`report`, `conclusion_status`, `closing_note` = `NO_OPEN_CONCERNS_NOTE` when
@@ -441,6 +443,34 @@ What exists:
         takeaway allowed). `based_on_earlier_answers` compares recorded
         (question, status, answer) with the current `responses.json` plus carried round-1
         answers. Nothing is rewritten.
+    - **`POST /clarifications/{batch_id}/followups`** (body exactly
+      `{"reassessment_id": …, "confirm_paid_request": true}`; `FollowupRequest`) runs the
+      existing `prepare_followup` on the named assessment, so its lineage, research, and
+      one-round rules apply unchanged.
+      - **Refused before any request (409 unless noted):**
+        - the batch is round 2 ("only one follow-up round");
+        - an unknown ID or one that doesn't fit `_REASSESSMENT_FILE` (404);
+        - an assessment `_read_saved_assessment` rejects, or a failed one;
+        - nothing remaining or unresolved;
+        - current answers that differ from the assessed ones (assess again first);
+        - `load_followup_source` failures;
+        - a clarification file other than the batch's own, or research outside `runs/`
+          (`_check_followup_lineage`);
+        - a paid request already running for the batch;
+        - missing configuration (503).
+        Messages are fixed text, never paths or model output.
+      - **Reuse:** `_existing_followup` returns the latest successful round-2 sibling whose
+        `previous` names this batch and assessment (`reused: true`, no request). This
+        includes a zero-question one. Failed attempts are skipped, so a retry is an explicit
+        new request. The stale-answer check runs before reuse.
+      - **Running:** the round-1 folder is marked `"followup"` until the shielded task and
+        its files finish, so `PUT`, assessment, and a second follow-up are 409s.
+        Out-of-band edits are reported as `answers_changed_during_generation`; the
+        follow-up carries the assessed answers.
+      - **Failures:** a failed call is a 502 from `_failure_message`, naming the saved
+        failed folder.
+      - **Success:** returns `FollowupView` (`followup_batch_id`, `question_count`,
+        `no_useful_followup`, `open_concerns`, `reused`).
     - **Covered by** `tests/test_batch_api.py` (TestClient over copies of the kitten
       fixture in `tmp_path`).
   - **Answering screen (`src/blindspot/web/`, served at `/ui`; `/` redirects there):**
@@ -477,6 +507,17 @@ What exists:
       or announcement. `isOutdated`/`outdatedNote` label "Based on earlier answers".
       `takeawayKind` handles legacy prose and missing takeaways. A failed read or only
       unusable files shows a neutral `SAVED_ASSESSMENT_UNAVAILABLE` note (not an alert).
+    - **Follow-up:** `#followup-card` is offered (`followupAvailability`) only under a
+      round-1 "Current assessment" with remaining concerns or unresolved uncertainties.
+      It is blocked ("Assess again first") when `needsReassessment` holds: the result is
+      outdated or its answers were edited while it ran; the same helper keeps "Assess
+      again" primary then. Its button is secondary while a question card is shown.
+      `askFollowup` sends `followupRequestBody` with a navigation ticket; on success it
+      opens the round-2 batch (`setUrl` push, then `load` with `followupOutcome`'s notice
+      and an announcement that includes it). Zero questions keep the assessment, show
+      the "No useful follow-up" message, and hide the card's intro. Errors use
+      `describeFollowupError` (`{message, retryable}`); the button reads "Try again" only
+      for retryable ones (502, no response, unexpected server error).
     - **Files:** plain HTML, CSS, and ES modules with no framework, build, or npm packages.
       `state.mjs` is pure logic (next question, payloads, labels, error wording) and is
       tested by `node --test tests/ui/state.test.mjs`. `app.mjs` wires the DOM, using
